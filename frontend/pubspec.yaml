@@ -1,0 +1,16 @@
+name: routestack_frontend
+description: A minimal Flutter frontend for RouteStack
+publish_to: 'none'
+version: 0.0.1
+
+environment:
+  sdk: '>=2.18.0 <3.0.0'
+
+dependencies:
+  flutter:
+    sdk: flutter
+  http: ^0.13.0
+  uuid: ^3.0.6
+
+flutter:
+  uses-material-design: true
