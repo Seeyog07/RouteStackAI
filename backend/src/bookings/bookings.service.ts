@@ -120,6 +120,17 @@ export class BookingsService {
       return hotelBody;
     }
 
+    // Extract token from MCP response and attach to each hotel
+    const token = hotelBody?.result?.token || hotelBody?.token || '';
+    const hotels = hotelBody?.result?.result || hotelBody?.result || [];
+    
+    if (Array.isArray(hotels) && token) {
+      hotels.forEach((hotel: any) => {
+        hotel.token = token;
+      });
+      console.log(`[findHotels] Attached token to ${hotels.length} hotels`);
+    }
+
     return hotelBody;
   }
 
@@ -156,8 +167,18 @@ export class BookingsService {
     return await this.mcpRequest('/mcp/hotel/get-hotel-details', { hotelId });
   }
 
-  async getRoomsAndRates(token: string, hotelId: string) {
-    return await this.mcpRequest('/mcp/hotel/get-rooms-and-rates', { token, hotelId });
+  async getRoomsAndRates(token: string, hotelId: string, checkIn?: string, checkOut?: string, rooms?: any[]) {
+    // If no token, return empty result gracefully to avoid auth rate limiting
+    if (!token || token.trim() === '') {
+      console.warn('[getRoomsAndRates] Skipping MCP call: token is empty');
+      return { body: { success: true, result: { rooms: [] }, message: 'No token provided' } };
+    }
+
+    const bodyData: any = { token, hotelId };
+    if (checkIn) bodyData.checkIn = checkIn;
+    if (checkOut) bodyData.checkOut = checkOut;
+    if (rooms) bodyData.rooms = rooms;
+    return await this.mcpRequest('/mcp/hotel/get-rooms-and-rates', bodyData);
   }
 
   async getPaymentUrl(params: {

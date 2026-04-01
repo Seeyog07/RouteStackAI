@@ -19,9 +19,17 @@ export declare class BookingsService {
         status: any;
         body: any;
     }>;
-    getRoomsAndRates(token: string, hotelId: string): Promise<{
+    getRoomsAndRates(token: string, hotelId: string, checkIn?: string, checkOut?: string, rooms?: any[]): Promise<{
         status: any;
         body: any;
+    } | {
+        body: {
+            success: boolean;
+            result: {
+                rooms: any[];
+            };
+            message: string;
+        };
     }>;
     getPaymentUrl(params: {
         portalUrl: string;

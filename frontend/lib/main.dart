@@ -3,6 +3,11 @@ import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:http/http.dart' as http;
 import 'package:uuid/uuid.dart';
+import 'package:flutter_svg/flutter_svg.dart';
+import 'features/hotel_details/models/image_carousel_model.dart';
+import 'features/hotel_details/widgets/image_carousel_widget.dart';
+import 'features/booking/services/booking_service.dart';
+import 'features/booking/widgets/booking_confirmation_dialog.dart';
 
 void main() => runApp(RouteStackApp());
 
@@ -41,6 +46,19 @@ class _HomePageState extends State<HomePage> {
   final checkOutCtrl = TextEditingController();
   String? sessionId;
   bool loading = false;
+  late BookingService bookingService;
+  
+  // Search context tracking for multi-turn conversations
+  String? lastSearchCity;
+  String? lastSearchCheckIn;
+  String? lastSearchCheckOut;
+  bool isWaitingForCheckOut = false;
+  
+  // Destination tracking for hotel revalidation
+  String? lastDestinationId;
+  String? lastDestinationCode;
+  String? lastToken;
+  String? lastRecommendationId;
 
   String get base {
     if (kIsWeb) return 'http://localhost:3000/api';
@@ -51,6 +69,7 @@ class _HomePageState extends State<HomePage> {
   void initState() {
     super.initState();
     sessionId = Uuid().v4();
+    bookingService = BookingService(baseUrl: base);
     _bot('Hi — I can help you book flights or hotels. Try: "book a flight"');
   }
 
@@ -79,6 +98,17 @@ class _HomePageState extends State<HomePage> {
           final reply = data['reply'] ??
               'I found ${cardsData['count'] ?? results.length} options for you:';
 
+          // Extract destinationId from first result if this is a hotel search
+          if (results.isNotEmpty && results.first is Map) {
+            final firstResult = results.first as Map;
+            if (firstResult['destinationId'] != null) {
+              lastDestinationId = firstResult['destinationId'].toString();
+            }
+            if (firstResult['destinationCode'] != null) {
+              lastDestinationCode = firstResult['destinationCode'].toString();
+            }
+          }
+
           // Transform results into card format if needed
           final cards = results.map((flight) {
             if (flight is Map) {
@@ -100,6 +130,11 @@ class _HomePageState extends State<HomePage> {
                   'stops': flight['stops'] ?? 0,
                   'departure': mainFlight['departureTime'],
                   'arrival': mainFlight['arrivalTime'],
+                  // Preserve destination info for bookings
+                  'destinationId': flight['destinationId'],
+                  'destinationCode': flight['destinationCode'],
+                  'token': flight['token'] ?? flight['result']?['token'],
+                  'recommendationId': flight['recommendationId'] ?? flight['result']?['recommendationId'],
                 };
               }
             }
@@ -123,10 +158,49 @@ class _HomePageState extends State<HomePage> {
         data['cards'].isNotEmpty) {
       final cards = data['cards'] as List;
       final reply = data['reply'] ?? 'Here are your options:';
+
+      // Extract destination and booking tokens from first hotel result
+      if (cards.isNotEmpty && cards.first is Map) {
+        final firstCard = cards.first as Map;
+        if (firstCard['destinationId'] != null) {
+          lastDestinationId = firstCard['destinationId'].toString();
+        }
+        if (firstCard['destinationCode'] != null) {
+          lastDestinationCode = firstCard['destinationCode'].toString();
+        }
+        if (firstCard['token'] != null) {
+          lastToken = firstCard['token'].toString();
+        }
+        if (firstCard['recommendationId'] != null) {
+          lastRecommendationId = firstCard['recommendationId'].toString();
+        }
+      }
+
+      final normalizedCards = cards.map((item) {
+        if (item is Map) {
+          return {
+            ...item,
+            'token': item['token'] ?? item['hotelToken'] ?? item['result']?['token'],
+            'recommendationId': item['recommendationId'] ?? item['result']?['recommendationId'],
+            // Preserve search context for booking
+            'checkIn': data['checkIn'] ?? lastSearchCheckIn,
+            'checkOut': data['checkOut'] ?? lastSearchCheckOut,
+            'rooms': item['rooms'] ?? [
+              {
+                'childAges': [],
+                'children': 0,
+                'adults': 2,
+              }
+            ],
+          };
+        }
+        return item;
+      }).toList();
+
       setState(
         () => messages.insert(
           0,
-          ChatMessage(reply, fromUser: false, cards: cards),
+          ChatMessage(reply, fromUser: false, cards: normalizedCards),
         ),
       );
       return;
@@ -201,12 +275,100 @@ class _HomePageState extends State<HomePage> {
   // the old method name from prior edits.
   String? _extractImageUrl(dynamic image) => _resolveImageUrl(image);
 
+  /// Check if string is a date in format YYYY-MM-DD
+  bool _isDateFormat(String text) {
+    final dateRegex = RegExp(r'^\d{4}-\d{2}-\d{2}$');
+    return dateRegex.hasMatch(text.trim());
+  }
+
+  /// Extract search parameters (city, check-in, check-out) from user message
+  Map<String, String?> _extractSearchParameters(String message) {
+    final lowerMsg = message.toLowerCase();
+    String? city;
+    String? checkIn;
+    String? checkOut;
+
+    // Look for date patterns (YYYY-MM-DD)
+    final dateRegex = RegExp(r'\d{4}-\d{2}-\d{2}');
+    final dates = dateRegex.allMatches(message);
+
+    if (dates.isNotEmpty) {
+      checkIn = dates.first.group(0);
+      if (dates.length > 1) {
+        checkOut = dates.elementAt(1).group(0);
+      }
+    }
+
+    // Try to extract city (common patterns)
+    if (lowerMsg.contains('hotel in ')) {
+      final idx = lowerMsg.indexOf('hotel in ') + 'hotel in '.length;
+      final afterIn = message.substring(idx);
+      final beforeFrom = afterIn.split(' from').first.trim();
+      final beforeDate = beforeFrom.split(' on').first.trim();
+      if (beforeDate.isNotEmpty) {
+        city = beforeDate;
+      }
+    } else if (lowerMsg.contains(' in ')) {
+      final idx = lowerMsg.lastIndexOf(' in ') + ' in '.length;
+      final afterIn = message.substring(idx);
+      final beforeFrom = afterIn.split(' from').first.trim();
+      final beforeDate = beforeFrom.split(' on').first.trim();
+      if (beforeDate.isNotEmpty && !_isDateFormat(beforeDate)) {
+        city = beforeDate;
+      }
+    }
+
+    return {'city': city, 'checkIn': checkIn, 'checkOut': checkOut};
+  }
+
+  /// Try to format incomplete hotel search as complete query
+  String? _tryFormatAsHotelSearch(String userMessage) {
+    final params = _extractSearchParameters(userMessage);
+
+    // If this looks like just a checkout date and we have previous context
+    if (_isDateFormat(userMessage.trim()) && 
+        lastSearchCity != null && 
+        lastSearchCheckIn != null) {
+      final checkOut = userMessage.trim();
+      lastSearchCheckOut = checkOut;
+      isWaitingForCheckOut = false;
+      return 'Hotel in $lastSearchCity from $lastSearchCheckIn to $checkOut';
+    }
+
+    // Extract new search parameters
+    if (params['city'] != null && params['checkIn'] != null) {
+      lastSearchCity = params['city'];
+      lastSearchCheckIn = params['checkIn'];
+      
+      // If we have checkout, it's complete
+      if (params['checkOut'] != null) {
+        lastSearchCheckOut = params['checkOut'];
+        isWaitingForCheckOut = false;
+        return 'Hotel in ${params['city']} from ${params['checkIn']} to ${params['checkOut']}';
+      } else {
+        // We need checkout date
+        isWaitingForCheckOut = true;
+        return null; // Let the backend ask for it
+      }
+    }
+
+    isWaitingForCheckOut = false;
+    return null; // Can't format, send as-is
+  }
+
   Future<void> _send(String text) async {
     if (text.trim().isEmpty) return;
 
-    final String userDisplayMessage = text;
+    String userDisplayMessage = text;
+    
+    // Try to format incomplete hotel search
+    final formattedMessage = _tryFormatAsHotelSearch(text);
+    if (formattedMessage != null && formattedMessage != text) {
+      userDisplayMessage = formattedMessage;
+    }
+
     setState(() {
-      messages.insert(0, ChatMessage(userDisplayMessage, fromUser: true));
+      messages.insert(0, ChatMessage(text, fromUser: true));
       loading = true;
     });
     inputCtrl.clear();
@@ -237,9 +399,32 @@ class _HomePageState extends State<HomePage> {
   Future<void> _selectCard(dynamic it) async {
     final name = it['name'] ?? 'Selected item';
     final price = it['ourprice'] ?? it['price'] ?? 'N/A';
+    
+    // Ensure hotel object has destinationId for booking
+    if (it is Map && it['destinationId'] == null && lastDestinationId != null) {
+      it['destinationId'] = lastDestinationId;
+    }
+    if (it is Map && it['destinationCode'] == null && lastDestinationCode != null) {
+      it['destinationCode'] = lastDestinationCode;
+    }
+
+    // Ensure we have booking token and recommendationId for revalidate
+    if (it is Map && it['token'] == null && lastToken != null) {
+      it['token'] = lastToken;
+    }
+    if (it is Map && it['recommendationId'] == null && lastRecommendationId != null) {
+      it['recommendationId'] = lastRecommendationId;
+    }
+    
+    // Add user message
     setState(
       () => messages.insert(0, ChatMessage('$name — \$$price', fromUser: true)),
     );
+
+    // Show booking confirmation dialog
+    _showBookingConfirmation(it);
+
+    // Still send to backend
     setState(() => loading = true);
 
     try {
@@ -265,6 +450,34 @@ class _HomePageState extends State<HomePage> {
     }
   }
 
+  /// Show booking confirmation dialog with room selection and payment
+  void _showBookingConfirmation(dynamic hotel) {
+    showGeneralDialog(
+      context: context,
+      barrierDismissible: true,
+      barrierLabel: 'Booking',
+      transitionDuration: const Duration(milliseconds: 300),
+      pageBuilder: (context, animation, secondaryAnimation) {
+        return BookingConfirmationDialog(
+          hotel: hotel,
+          bookingService: bookingService,
+          onClose: () {
+            // Handle close if needed
+          },
+        );
+      },
+      transitionBuilder: (context, animation, secondaryAnimation, child) {
+        return ScaleTransition(
+          scale: CurvedAnimation(parent: animation, curve: Curves.easeOutBack),
+          child: FadeTransition(
+            opacity: CurvedAnimation(parent: animation, curve: Curves.easeIn),
+            child: child,
+          ),
+        );
+      },
+    );
+  }
+
   Future<void> _searchHotels() async {
     final city = cityCtrl.text.trim();
     final checkIn = checkInCtrl.text.trim();
@@ -286,23 +499,51 @@ class _HomePageState extends State<HomePage> {
   // --- UI BUILDING METHODS ---
 
   Widget _chatTab() {
-    return Column(
-      children: [
-        Expanded(
-          child: ListView.builder(
-            reverse: true,
-            padding: const EdgeInsets.all(12),
-            itemCount: messages.length,
-            itemBuilder: (ctx, i) {
-              final m = messages[i];
-              return (m.cards != null && m.cards!.isNotEmpty)
-                  ? _buildCardMessage(m)
-                  : _buildTextMessage(m);
-            },
-          ),
+    return Container(
+      decoration: BoxDecoration(
+        gradient: LinearGradient(
+          begin: Alignment.topLeft,
+          end: Alignment.bottomRight,
+          colors: [
+            Color(0xFF1e3c72),
+            Color(0xFF2a5298),
+            Color(0xFF3d5a80),
+          ],
         ),
-        _buildInputArea(),
-      ],
+      ),
+      child: Stack(
+        children: [
+          // Background SVG image with opacity
+          Positioned.fill(
+            child: Opacity(
+              opacity: 0.12,
+              child: Image.asset(
+                'assets/images/FlightNHotel.webp',
+                fit: BoxFit.cover,
+              ),
+            ),
+          ),
+          // Chat content
+          Column(
+            children: [
+              Expanded(
+                child: ListView.builder(
+                  reverse: true,
+                  padding: const EdgeInsets.all(12),
+                  itemCount: messages.length,
+                  itemBuilder: (ctx, i) {
+                    final m = messages[i];
+                    return (m.cards != null && m.cards!.isNotEmpty)
+                        ? _buildCardMessage(m)
+                        : _buildTextMessage(m);
+                  },
+                ),
+              ),
+              _buildInputArea(),
+            ],
+          ),
+        ],
+      ),
     );
   }
 
@@ -315,14 +556,33 @@ class _HomePageState extends State<HomePage> {
         margin: const EdgeInsets.symmetric(vertical: 6),
         padding: const EdgeInsets.all(14),
         decoration: BoxDecoration(
-          color: m.fromUser ? Colors.indigo.shade100 : Colors.white,
+          gradient: m.fromUser 
+            ? LinearGradient(
+                colors: [Color(0xFF667eea), Color(0xFF764ba2)],
+                begin: Alignment.topLeft,
+                end: Alignment.bottomRight,
+              )
+            : LinearGradient(
+                colors: [Color(0xFFf5f5f5), Color(0xFFfafafa)],
+                begin: Alignment.topLeft,
+                end: Alignment.bottomRight,
+              ),
           borderRadius: BorderRadius.circular(16),
-          boxShadow: const [
+          boxShadow: [
             BoxShadow(
-                color: Colors.black12, blurRadius: 4, offset: Offset(0, 2))
+              color: Colors.black26,
+              blurRadius: 6,
+              offset: Offset(0, 2),
+            )
           ],
         ),
-        child: Text(m.text ?? '', style: const TextStyle(fontSize: 15)),
+        child: Text(
+          m.text ?? '',
+          style: TextStyle(
+            fontSize: 15,
+            color: m.fromUser ? Colors.white : Colors.black87,
+          ),
+        ),
       ),
     );
   }
@@ -334,9 +594,9 @@ class _HomePageState extends State<HomePage> {
         margin: const EdgeInsets.symmetric(vertical: 8),
         padding: const EdgeInsets.all(12),
         decoration: BoxDecoration(
-            color: Colors.white,
+            color: Colors.white.withOpacity(0.95),
             borderRadius: BorderRadius.circular(12),
-            boxShadow: const [
+            boxShadow: [
               BoxShadow(
                   color: Colors.black12, blurRadius: 6, offset: Offset(0, 3))
             ]),
@@ -365,7 +625,7 @@ class _HomePageState extends State<HomePage> {
                               ClipRRect(
                                 borderRadius: BorderRadius.circular(8),
                                 child: Image.network(
-                                  it['heroImage'],
+                                  _proxyImageUrl(it['heroImage'].toString()),
                                   height: 150,
                                   width: double.infinity,
                                   fit: BoxFit.cover,
@@ -499,37 +759,79 @@ class _HomePageState extends State<HomePage> {
 
   Widget _buildInputArea() {
     return SafeArea(
-      child: Row(
-        children: [
-          Expanded(
-            child: Padding(
-              padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
-              child: TextField(
-                controller: inputCtrl,
-                onSubmitted: _send,
-                decoration: InputDecoration(
-                    hintText: 'Type your message...',
-                    fillColor: Colors.white,
-                    filled: true,
-                    border: OutlineInputBorder(
-                        borderRadius: BorderRadius.circular(8))),
-              ),
+      child: Container(
+        decoration: BoxDecoration(
+          gradient: LinearGradient(
+            colors: [
+              Color(0xFF2a3f5f),
+              Color(0xFF1e3c72),
+            ],
+            begin: Alignment.topCenter,
+            end: Alignment.bottomCenter,
+          ),
+          border: Border(
+            top: BorderSide(
+              color: Color(0xFF667eea).withOpacity(0.3),
+              width: 1,
             ),
           ),
-          Padding(
-            padding: const EdgeInsets.only(right: 12),
-            child: loading
-                ? const SizedBox(
-                    width: 20,
-                    height: 20,
-                    child: CircularProgressIndicator(strokeWidth: 2))
-                : FloatingActionButton(
-                    mini: true,
-                    onPressed: () => _send(inputCtrl.text),
-                    child: const Icon(Icons.send),
+        ),
+        child: Row(
+          children: [
+            Expanded(
+              child: Padding(
+                padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+                child: TextField(
+                  controller: inputCtrl,
+                  onSubmitted: _send,
+                  style: TextStyle(color: Colors.black),
+                  decoration: InputDecoration(
+                    hintText: 'Ask me anything about flights or hotels...',
+                    hintStyle: TextStyle(color: Colors.black),
+                    fillColor: Colors.white.withOpacity(0.95),
+                    filled: true,
+                    prefixIcon: Icon(Icons.search, color: Color(0xFF667eea)),
+                    border: OutlineInputBorder(
+                      borderRadius: BorderRadius.circular(24),
+                      borderSide: BorderSide.none,
+                    ),
+                    contentPadding: EdgeInsets.symmetric(horizontal: 16, vertical: 12),
                   ),
-          )
-        ],
+                ),
+              ),
+            ),
+            Padding(
+              padding: const EdgeInsets.only(right: 12),
+              child: loading
+                  ? Container(
+                    width: 48,
+                    height: 48,
+                    decoration: BoxDecoration(
+                      gradient: LinearGradient(
+                        colors: [Color(0xFF667eea), Color(0xFF764ba2)],
+                      ),
+                      shape: BoxShape.circle,
+                    ),
+                    child: Center(
+                      child: SizedBox(
+                        width: 20,
+                        height: 20,
+                        child: CircularProgressIndicator(
+                          strokeWidth: 2,
+                          valueColor: AlwaysStoppedAnimation<Color>(Colors.white),
+                        ),
+                      ),
+                    ),
+                  )
+                  : FloatingActionButton(
+                    onPressed: () => _send(inputCtrl.text),
+                    mini: true,
+                    backgroundColor: Color(0xFF667eea),
+                    child: Icon(Icons.send, color: Colors.white),
+                  ),
+            )
+          ],
+        ),
       ),
     );
   }
@@ -870,41 +1172,13 @@ class _HomePageState extends State<HomePage> {
                             ],
                             if (images.isNotEmpty) ...[
                               _buildSectionHeader('Photo Gallery'),
-                              SizedBox(
-                                height: 130,
-                                child: ListView.builder(
-                                  scrollDirection: Axis.horizontal,
-                                  itemCount: images.length,
-                                  itemBuilder: (context, index) {
-                                    final image = images[index];
-                                    final imageUrl = _resolveImageUrl(image);
-
-                                    if (imageUrl == null)
-                                      return const SizedBox.shrink();
-
-                                    final proxiedImageUrl =
-                                        _proxyImageUrl(imageUrl);
-
-                                    return Container(
-                                      width: 130,
-                                      margin: const EdgeInsets.only(right: 8),
-                                      child: ClipRRect(
-                                        borderRadius: BorderRadius.circular(12),
-                                        child: Image.network(
-                                          proxiedImageUrl,
-                                          fit: BoxFit.cover,
-                                          errorBuilder:
-                                              (context, error, stackTrace) =>
-                                                  Container(
-                                            color: Colors.grey[300],
-                                            child: const Icon(Icons.image,
-                                                color: Colors.grey),
-                                          ),
-                                        ),
-                                      ),
-                                    );
-                                  },
+                              ImageCarouselWidget(
+                                gallery: ImageGalleryModel.fromImageList(
+                                  images,
+                                  hotelData['name'] ?? hotel['name'],
                                 ),
+                                proxyImageUrl: _proxyImageUrl,
+                                primaryColor: Colors.indigo,
                               ),
                               const SizedBox(height: 12),
                             ],
@@ -1087,15 +1361,33 @@ class _HomePageState extends State<HomePage> {
 
   @override
   Widget build(BuildContext context) {
-    return DefaultTabController(
-      length: 2,
-      child: Scaffold(
-        appBar: AppBar(
-            title: const Text('RouteStack Chat'),
-            bottom:
-                const TabBar(tabs: [Tab(text: 'Chat'), Tab(text: 'Browse')])),
-        body: TabBarView(children: [_chatTab(), _browseTab()]),
+    return Scaffold(
+      appBar: AppBar(
+        title: const Text(
+          'RouteStack',
+          style: TextStyle(
+            fontSize: 24,
+            fontWeight: FontWeight.bold,
+            color: Colors.white,
+          ),
+        ),
+        centerTitle: false,
+        elevation: 8,
+        flexibleSpace: Container(
+          decoration: BoxDecoration(
+            gradient: LinearGradient(
+              begin: Alignment.topLeft,
+              end: Alignment.bottomRight,
+              colors: [
+                Color(0xFF667eea),
+                Color(0xFF764ba2),
+                Color(0xFFf093fb),
+              ],
+            ),
+          ),
+        ),
       ),
+      body: _chatTab(),
     );
   }
 }

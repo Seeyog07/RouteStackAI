@@ -1,0 +1,87 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1200 800">
+  <!-- Gradient background -->
+  <defs>
+    <linearGradient id="bgGradient" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" style="stop-color:#667eea;stop-opacity:1" />
+      <stop offset="50%" style="stop-color:#764ba2;stop-opacity:1" />
+      <stop offset="100%" style="stop-color:#f093fb;stop-opacity:1" />
+    </linearGradient>
+    <linearGradient id="skyGradient" x1="0%" y1="0%" x2="0%" y2="100%">
+      <stop offset="0%" style="stop-color:#1e3c72;stop-opacity:1" />
+      <stop offset="100%" style="stop-color:#2a5298;stop-opacity:1" />
+    </linearGradient>
+  </defs>
+  
+  <!-- Background -->
+  <rect width="1200" height="800" fill="url(#skyGradient)"/>
+  
+  <!-- Decorative clouds -->
+  <circle cx="150" cy="100" r="40" fill="#ffffff" opacity="0.7"/>
+  <circle cx="190" cy="95" r="35" fill="#ffffff" opacity="0.7"/>
+  <circle cx="110" cy="95" r="30" fill="#ffffff" opacity="0.7"/>
+  
+  <circle cx="900" cy="150" r="45" fill="#ffffff" opacity="0.6"/>
+  <circle cx="950" cy="145" r="40" fill="#ffffff" opacity="0.6"/>
+  <circle cx="850" cy="145" r="35" fill="#ffffff" opacity="0.6"/>
+  
+  <!-- Airplane 1 -->
+  <g transform="translate(300, 120)">
+    <!-- Fuselage -->
+    <ellipse cx="0" cy="0" rx="30" ry="12" fill="#ff6b6b"/>
+    <!-- Wings -->
+    <rect x="-50" y="-4" width="100" height="8" fill="#ff6b6b"/>
+    <!-- Tail -->
+    <polygon points="25,0 35,-8 35,8" fill="#ff6b6b"/>
+    <!-- Window -->
+    <circle cx="-10" cy="0" r="3" fill="#ffffff"/>
+    <circle cx="0" cy="0" r="3" fill="#ffffff"/>
+  </g>
+  
+  <!-- Airplane 2 -->
+  <g transform="translate(1000, 200)" opacity="0.8">
+    <!-- Fuselage -->
+    <ellipse cx="0" cy="0" rx="25" ry="10" fill="#4ecdc4"/>
+    <!-- Wings -->
+    <rect x="-40" y="-3" width="80" height="6" fill="#4ecdc4"/>
+    <!-- Tail -->
+    <polygon points="20,0 28,-6 28,6" fill="#4ecdc4"/>
+    <!-- Window -->
+    <circle cx="-8" cy="0" r="2.5" fill="#ffffff"/>
+  </g>
+  
+  <!-- Building icons -->
+  <g transform="translate(100, 500)">
+    <!-- Hotel building -->
+    <rect x="0" y="0" width="60" height="120" fill="#667eea"/>
+    <rect x="5" y="10" width="10" height="10" fill="#ffd700"/>
+    <rect x="20" y="10" width="10" height="10" fill="#ffd700"/>
+    <rect x="35" y="10" width="10" height="10" fill="#ffd700"/>
+    <rect x="50" y="10" width="10" height="10" fill="#ffd700"/>
+    <rect x="5" y="30" width="10" height="10" fill="#ffd700"/>
+    <rect x="20" y="30" width="10" height="10" fill="#ffd700"/>
+    <rect x="35" y="30" width="10" height="10" fill="#ffd700"/>
+    <rect x="50" y="30" width="10" height="10" fill="#ffd700"/>
+    <rect x="5" y="50" width="10" height="10" fill="#ffd700"/>
+    <rect x="20" y="50" width="10" height="10" fill="#ffd700"/>
+    <rect x="35" y="50" width="10" height="10" fill="#ffd700"/>
+    <rect x="50" y="50" width="10" height="10" fill="#ffd700"/>
+  </g>
+  
+  <!-- Pin markers -->
+  <g transform="translate(600, 450)">
+    <circle cx="0" cy="0" r="15" fill="#ff6b6b"/>
+    <circle cx="0" cy="0" r="8" fill="#ffffff"/>
+    <polygon points="0,15 -10,35 0,30 10,35" fill="#ff6b6b"/>
+  </g>
+  
+  <g transform="translate(800, 380)" opacity="0.7">
+    <circle cx="0" cy="0" r="12" fill="#4ecdc4"/>
+    <circle cx="0" cy="0" r="6" fill="#ffffff"/>
+    <polygon points="0,12 -8,28 0,24 8,28" fill="#4ecdc4"/>
+  </g>
+  
+  <!-- Decorative elements -->
+  <circle cx="50" cy="650" r="20" fill="#667eea" opacity="0.3"/>
+  <circle cx="1150" cy="700" r="30" fill="#f093fb" opacity="0.2"/>
+  <circle cx="600" cy="750" r="25" fill="#667eea" opacity="0.25"/>
+</svg>

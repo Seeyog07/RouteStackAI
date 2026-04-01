@@ -103,6 +103,14 @@ let BookingsService = class BookingsService {
             console.warn('[findHotels] Hotel API returned failure', hotelBody);
             return hotelBody;
         }
+        const token = hotelBody?.result?.token || hotelBody?.token || '';
+        const hotels = hotelBody?.result?.result || hotelBody?.result || [];
+        if (Array.isArray(hotels) && token) {
+            hotels.forEach((hotel) => {
+                hotel.token = token;
+            });
+            console.log(`[findHotels] Attached token to ${hotels.length} hotels`);
+        }
         return hotelBody;
     }
     async searchDestinations(query) {
@@ -132,8 +140,19 @@ let BookingsService = class BookingsService {
     async getHotelDetails(hotelId) {
         return await this.mcpRequest('/mcp/hotel/get-hotel-details', { hotelId });
     }
-    async getRoomsAndRates(token, hotelId) {
-        return await this.mcpRequest('/mcp/hotel/get-rooms-and-rates', { token, hotelId });
+    async getRoomsAndRates(token, hotelId, checkIn, checkOut, rooms) {
+        if (!token || token.trim() === '') {
+            console.warn('[getRoomsAndRates] Skipping MCP call: token is empty');
+            return { body: { success: true, result: { rooms: [] }, message: 'No token provided' } };
+        }
+        const bodyData = { token, hotelId };
+        if (checkIn)
+            bodyData.checkIn = checkIn;
+        if (checkOut)
+            bodyData.checkOut = checkOut;
+        if (rooms)
+            bodyData.rooms = rooms;
+        return await this.mcpRequest('/mcp/hotel/get-rooms-and-rates', bodyData);
     }
     async getPaymentUrl(params) {
         return await this.mcpRequest('/mcp/hotel/get-payment-url', params);

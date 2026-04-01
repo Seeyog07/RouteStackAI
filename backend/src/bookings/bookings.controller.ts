@@ -50,8 +50,8 @@ export class BookingsController {
   }
 
   @Post('mcp/hotel/get-rooms-and-rates')
-  async proxyGetRoomsAndRates(@Body() body: { token: string; hotelId: string }) {
-    const res = await this.service.getRoomsAndRates(body.token, body.hotelId);
+  async proxyGetRoomsAndRates(@Body() body: { token: string; hotelId: string; checkIn?: string; checkOut?: string; rooms?: any[] }) {
+    const res = await this.service.getRoomsAndRates(body.token, body.hotelId, body.checkIn, body.checkOut, body.rooms);
     return res.body;
   }
 

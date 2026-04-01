@@ -314,10 +314,10 @@ let ChatService = class ChatService {
                     return {
                         reply: `Excellent choice! ${selected?.name ?? 'Selected hotel'} has been locked. ` +
                             `Hotel info loaded. Please provide guest full name to complete booking.`,
-                        cards: [
-                            { label: 'Hotel Details', value: details },
-                            { label: 'Room Rates', value: roomRates },
-                        ],
+                        // cards: [
+                        //     { label: 'Hotel Details', value: details },
+                        //     { label: 'Room Rates', value: roomRates },
+                        // ],
                     };
                 }
                 catch (error) {
@@ -483,6 +483,7 @@ let ChatService = class ChatService {
                     reviews: hotel.reviews,
                     mainamenity: hotel.mainamenity,
                     facilities: hotel.facilities?.slice(0, 5) || [],
+                    token: hotel.token,
                 }));
                 return {
                     sessionId,

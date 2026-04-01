@@ -47,7 +47,7 @@ let BookingsController = class BookingsController {
         return res.body;
     }
     async proxyGetRoomsAndRates(body) {
-        const res = await this.service.getRoomsAndRates(body.token, body.hotelId);
+        const res = await this.service.getRoomsAndRates(body.token, body.hotelId, body.checkIn, body.checkOut, body.rooms);
         return res.body;
     }
     async proxyGetPaymentUrl(body) {

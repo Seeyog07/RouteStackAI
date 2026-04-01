@@ -578,6 +578,7 @@ export class ChatService {
           reviews: hotel.reviews,
           mainamenity: hotel.mainamenity,
           facilities: hotel.facilities?.slice(0, 5) || [], // Show first 5 facilities
+          token: hotel.token, // Booking token from MCP response
         }));
 
         return {
