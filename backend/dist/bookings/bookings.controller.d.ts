@@ -1,3 +1,4 @@
+import { Response } from 'express';
 import { BookingsService } from './bookings.service';
 import { CreateBookingDto } from './dto/create-booking.dto';
 export declare class BookingsController {
@@ -29,6 +30,7 @@ export declare class BookingsController {
     proxyCancelBooking(body: {
         bookingId: string;
     }): Promise<any>;
+    imageProxy(url: string, res: Response): Promise<void>;
     createBooking(dto: CreateBookingDto): {
         createdAt: string;
         name: string;

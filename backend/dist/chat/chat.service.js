@@ -51,18 +51,27 @@ let ChatService = class ChatService {
         return {};
     }
     extractCity(text) {
+        const cityCountryRegex = /(?:hotel\s+in|stay\s+in|room\s+in|at|in)\s+([a-z\s]+?)(?:\s*,\s*|\s+in\s+|\s+)([a-z\s]+?)(?:\s|$|\.)/i;
+        let match = text.match(cityCountryRegex);
+        if (match) {
+            const city = match[1].trim();
+            const country = match[2].trim();
+            if (!/\d{4}-\d{2}-\d{2}/.test(country) && !['from', 'to', 'on', 'at'].includes(country.toLowerCase())) {
+                return { city, country };
+            }
+        }
         const cityRegex = /(?:hotel\s+in|stay\s+in|room\s+in|at|in)\s+([a-z\s]+?)(?:\s|$|\.)/i;
-        const match = text.match(cityRegex);
+        match = text.match(cityRegex);
         if (match)
-            return match[1].trim();
+            return { city: match[1].trim(), country: null };
         const cleaned = text.trim();
         const skipKeywords = ['flight', 'hotel', 'cancel', 'booking', 'help'];
         if (cleaned.length > 1 &&
             /^[a-zA-Z\s]+$/.test(cleaned) &&
             !skipKeywords.some((kw) => cleaned.toLowerCase().includes(kw))) {
-            return cleaned;
+            return { city: cleaned, country: null };
         }
-        return null;
+        return { city: null, country: null };
     }
     validateFlightData(data) {
         if (!data.from)
@@ -92,6 +101,7 @@ let ChatService = class ChatService {
     }
     clearHotelFields(sess) {
         sess.city = undefined;
+        sess.country = undefined;
         sess.checkIn = undefined;
         sess.checkOut = undefined;
         sess.adults = undefined;
@@ -404,9 +414,11 @@ let ChatService = class ChatService {
             }
         }
         if (sess.bookingType === 'hotel') {
-            const cityFromMessage = this.extractCity(originalMessage);
+            const { city: cityFromMessage, country: countryFromMessage } = this.extractCity(originalMessage);
             if (cityFromMessage)
                 sess.city = cityFromMessage;
+            if (countryFromMessage)
+                sess.country = countryFromMessage;
             const dates = this.extractDates(originalMessage);
             if (dates.length > 0)
                 sess.checkIn = dates[0];
@@ -426,15 +438,16 @@ let ChatService = class ChatService {
             }
             sess.state = 'searching_hotels';
             try {
-                const destRes = await this.bookingsService.searchDestinations(sess.city);
+                const searchCity = sess.country ? `${sess.city}, ${sess.country}` : sess.city;
+                const destRes = await this.bookingsService.searchDestinations(searchCity);
                 const destData = destRes?.body ?? destRes;
                 const destinations = destData?.result ?? [];
                 if (!Array.isArray(destinations) || destinations.length === 0) {
                     return {
-                        reply: `Could not find destination info for ${sess.city}. Please try a different city.`,
+                        reply: `Could not find destination info for ${searchCity}. Please try a different city.`,
                     };
                 }
-                const hotels = await this.bookingsService.findHotels(sess.city, sess.checkIn, sess.checkOut);
+                const hotels = await this.bookingsService.findHotels(searchCity, sess.checkIn, sess.checkOut);
                 const hotelsBody = hotels?.body ?? hotels;
                 if (hotelsBody?.success === false && hotelsBody?.code === 204) {
                     return {
@@ -456,9 +469,25 @@ let ChatService = class ChatService {
                 }
                 sess.lastResults = hotelItems;
                 sess.state = 'choosing_hotel';
+                const formattedCards = hotelItems.map((hotel, index) => ({
+                    id: hotel.id,
+                    name: hotel.name,
+                    providerName: hotel.providerName || 'EAN',
+                    starRating: hotel.starRating,
+                    ourprice: hotel.ourprice,
+                    baseprice: hotel.baseprice || 0,
+                    saving: hotel.saving || 0,
+                    distance: hotel.distance,
+                    heroImage: hotel.heroImage,
+                    contact: hotel.contact,
+                    reviews: hotel.reviews,
+                    mainamenity: hotel.mainamenity,
+                    facilities: hotel.facilities?.slice(0, 5) || [],
+                }));
                 return {
-                    reply: `Perfect! I found hotels in ${sess.city} from ${sess.checkIn} to ${sess.checkOut}. Which one interests you?`,
-                    cards: hotelItems,
+                    sessionId,
+                    reply: `Perfect! I found hotels in ${searchCity} from ${sess.checkIn} to ${sess.checkOut}. Which one interests you?`,
+                    cards: formattedCards,
                 };
             }
             catch (error) {

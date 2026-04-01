@@ -16,6 +16,7 @@ export declare class ChatService {
         reply: string;
         booking?: undefined;
         cards?: undefined;
+        sessionId?: undefined;
     } | {
         reply: string;
         booking: {
@@ -27,7 +28,14 @@ export declare class ChatService {
             id: string;
         };
         cards?: undefined;
+        sessionId?: undefined;
     } | {
+        reply: string;
+        cards: any;
+        booking?: undefined;
+        sessionId?: undefined;
+    } | {
+        sessionId: string;
         reply: string;
         cards: any;
         booking?: undefined;

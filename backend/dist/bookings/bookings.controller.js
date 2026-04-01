@@ -11,9 +11,11 @@ var __metadata = (this && this.__metadata) || function (k, v) {
 var __param = (this && this.__param) || function (paramIndex, decorator) {
     return function (target, key) { decorator(target, key, paramIndex); }
 };
+var _a;
 Object.defineProperty(exports, "__esModule", { value: true });
 exports.BookingsController = void 0;
 const common_1 = require("@nestjs/common");
+const express_1 = require("express");
 const bookings_service_1 = require("./bookings.service");
 const create_booking_dto_1 = require("./dto/create-booking.dto");
 let BookingsController = class BookingsController {
@@ -63,6 +65,28 @@ let BookingsController = class BookingsController {
     async proxyCancelBooking(body) {
         const res = await this.service.cancelBooking(body.bookingId);
         return res.body;
+    }
+    async imageProxy(url, res) {
+        if (!url) {
+            throw new common_1.BadRequestException('url query parameter is required');
+        }
+        try {
+            const decodedUrl = decodeURIComponent(url);
+            const fetched = await fetch(decodedUrl);
+            if (!fetched.ok) {
+                throw new common_1.HttpException('Unable to fetch image', fetched.status);
+            }
+            const contentType = fetched.headers.get('content-type') || 'application/octet-stream';
+            const cacheControl = fetched.headers.get('cache-control') || 'public, max-age=3600';
+            res.setHeader('Content-Type', contentType);
+            res.setHeader('Cache-Control', cacheControl);
+            const buffer = Buffer.from(await fetched.arrayBuffer());
+            res.send(buffer);
+        }
+        catch (error) {
+            console.error('image-proxy error:', error);
+            throw new common_1.HttpException('Image proxy error', common_1.HttpStatus.BAD_GATEWAY);
+        }
     }
     createBooking(dto) {
         return this.service.createBooking(dto);
@@ -145,6 +169,14 @@ __decorate([
     __metadata("design:paramtypes", [Object]),
     __metadata("design:returntype", Promise)
 ], BookingsController.prototype, "proxyCancelBooking", null);
+__decorate([
+    (0, common_1.Get)('image-proxy'),
+    __param(0, (0, common_1.Query)('url')),
+    __param(1, (0, common_1.Res)()),
+    __metadata("design:type", Function),
+    __metadata("design:paramtypes", [String, typeof (_a = typeof express_1.Response !== "undefined" && express_1.Response) === "function" ? _a : Object]),
+    __metadata("design:returntype", Promise)
+], BookingsController.prototype, "imageProxy", null);
 __decorate([
     (0, common_1.Post)('book'),
     (0, common_1.HttpCode)(common_1.HttpStatus.CREATED),

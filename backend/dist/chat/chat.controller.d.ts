@@ -27,5 +27,10 @@ export declare class ChatController {
         cards: any;
         booking?: undefined;
         sessionId: string;
+    } | {
+        sessionId: string;
+        reply: string;
+        cards: any;
+        booking?: undefined;
     }>;
 }

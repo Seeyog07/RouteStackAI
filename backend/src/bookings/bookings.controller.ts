@@ -1,4 +1,5 @@
-import { Body, Controller, Get, Post, HttpCode, HttpStatus, Query, BadRequestException } from '@nestjs/common';
+import { Body, Controller, Get, Post, HttpCode, HttpStatus, Query, BadRequestException, Res, HttpException } from '@nestjs/common';
+import { Response } from 'express';
 import { BookingsService } from './bookings.service';
 import { CreateBookingDto } from './dto/create-booking.dto';
 import { SearchHotelsDto } from './dto/search-hotels.dto';
@@ -76,6 +77,34 @@ export class BookingsController {
   async proxyCancelBooking(@Body() body: { bookingId: string }) {
     const res = await this.service.cancelBooking(body.bookingId);
     return res.body;
+  }
+
+  @Get('image-proxy')
+  async imageProxy(@Query('url') url: string, @Res() res: Response) {
+    if (!url) {
+      throw new BadRequestException('url query parameter is required');
+    }
+
+    try {
+      const decodedUrl = decodeURIComponent(url);
+      const fetched = await fetch(decodedUrl);
+
+      if (!fetched.ok) {
+        throw new HttpException('Unable to fetch image', fetched.status);
+      }
+
+      const contentType = fetched.headers.get('content-type') || 'application/octet-stream';
+      const cacheControl = fetched.headers.get('cache-control') || 'public, max-age=3600';
+
+      res.setHeader('Content-Type', contentType);
+      res.setHeader('Cache-Control', cacheControl);
+
+      const buffer = Buffer.from(await fetched.arrayBuffer());
+      res.send(buffer);
+    } catch (error) {
+      console.error('image-proxy error:', error);
+      throw new HttpException('Image proxy error', HttpStatus.BAD_GATEWAY);
+    }
   }
 
   // 4. BOOKING: Standard POST
