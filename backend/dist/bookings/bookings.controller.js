@@ -16,7 +16,6 @@ exports.BookingsController = void 0;
 const common_1 = require("@nestjs/common");
 const bookings_service_1 = require("./bookings.service");
 const create_booking_dto_1 = require("./dto/create-booking.dto");
-const search_hotels_dto_1 = require("./dto/search-hotels.dto");
 let BookingsController = class BookingsController {
     constructor(service) {
         this.service = service;
@@ -33,8 +32,36 @@ let BookingsController = class BookingsController {
         }
         return await this.service.findHotels(city, checkIn, checkOut);
     }
+    async proxySearchDestinations(body) {
+        const res = await this.service.searchDestinations(body.query);
+        return res.body;
+    }
     async proxySearchHotels(body) {
         const res = await this.service.searchHotels(body);
+        return res.body;
+    }
+    async proxyGetHotelDetails(body) {
+        const res = await this.service.getHotelDetails(body.hotelId);
+        return res.body;
+    }
+    async proxyGetRoomsAndRates(body) {
+        const res = await this.service.getRoomsAndRates(body.token, body.hotelId);
+        return res.body;
+    }
+    async proxyGetPaymentUrl(body) {
+        const res = await this.service.getPaymentUrl(body);
+        return res.body;
+    }
+    async proxyRevalidateHotel(body) {
+        const res = await this.service.revalidateHotel(body.token, body.recommendationId, body.hotelId);
+        return res.body;
+    }
+    async proxyGetBookingInfo(body) {
+        const res = await this.service.getBookingInfo(body.bookingId);
+        return res.body;
+    }
+    async proxyCancelBooking(body) {
+        const res = await this.service.cancelBooking(body.bookingId);
         return res.body;
     }
     createBooking(dto) {
@@ -63,12 +90,61 @@ __decorate([
     __metadata("design:returntype", Promise)
 ], BookingsController.prototype, "getHotels", null);
 __decorate([
+    (0, common_1.Post)('mcp/hotel/search-destinations'),
+    __param(0, (0, common_1.Body)()),
+    __metadata("design:type", Function),
+    __metadata("design:paramtypes", [Object]),
+    __metadata("design:returntype", Promise)
+], BookingsController.prototype, "proxySearchDestinations", null);
+__decorate([
     (0, common_1.Post)('mcp/hotel/search-hotels'),
     __param(0, (0, common_1.Body)()),
     __metadata("design:type", Function),
-    __metadata("design:paramtypes", [search_hotels_dto_1.SearchHotelsDto]),
+    __metadata("design:paramtypes", [Object]),
     __metadata("design:returntype", Promise)
 ], BookingsController.prototype, "proxySearchHotels", null);
+__decorate([
+    (0, common_1.Post)('mcp/hotel/get-hotel-details'),
+    __param(0, (0, common_1.Body)()),
+    __metadata("design:type", Function),
+    __metadata("design:paramtypes", [Object]),
+    __metadata("design:returntype", Promise)
+], BookingsController.prototype, "proxyGetHotelDetails", null);
+__decorate([
+    (0, common_1.Post)('mcp/hotel/get-rooms-and-rates'),
+    __param(0, (0, common_1.Body)()),
+    __metadata("design:type", Function),
+    __metadata("design:paramtypes", [Object]),
+    __metadata("design:returntype", Promise)
+], BookingsController.prototype, "proxyGetRoomsAndRates", null);
+__decorate([
+    (0, common_1.Post)('mcp/hotel/get-payment-url'),
+    __param(0, (0, common_1.Body)()),
+    __metadata("design:type", Function),
+    __metadata("design:paramtypes", [Object]),
+    __metadata("design:returntype", Promise)
+], BookingsController.prototype, "proxyGetPaymentUrl", null);
+__decorate([
+    (0, common_1.Post)('mcp/hotel/revalidate'),
+    __param(0, (0, common_1.Body)()),
+    __metadata("design:type", Function),
+    __metadata("design:paramtypes", [Object]),
+    __metadata("design:returntype", Promise)
+], BookingsController.prototype, "proxyRevalidateHotel", null);
+__decorate([
+    (0, common_1.Post)('mcp/hotel/get-booking-info'),
+    __param(0, (0, common_1.Body)()),
+    __metadata("design:type", Function),
+    __metadata("design:paramtypes", [Object]),
+    __metadata("design:returntype", Promise)
+], BookingsController.prototype, "proxyGetBookingInfo", null);
+__decorate([
+    (0, common_1.Post)('mcp/hotel/cancel-booking'),
+    __param(0, (0, common_1.Body)()),
+    __metadata("design:type", Function),
+    __metadata("design:paramtypes", [Object]),
+    __metadata("design:returntype", Promise)
+], BookingsController.prototype, "proxyCancelBooking", null);
 __decorate([
     (0, common_1.Post)('book'),
     (0, common_1.HttpCode)(common_1.HttpStatus.CREATED),

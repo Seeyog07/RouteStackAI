@@ -9,6 +9,9 @@ export declare class ChatService {
     private extractCity;
     private validateFlightData;
     private validateHotelData;
+    private clearFlightFields;
+    private clearHotelFields;
+    private setBookingType;
     handleMessage(sessionId: string, message: string): Promise<{
         reply: string;
         booking?: undefined;

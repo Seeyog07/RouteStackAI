@@ -75,9 +75,41 @@ let BookingsService = class BookingsService {
         console.log("Checking flights:", res.body);
         return res.body;
     }
-    async findHotels(city, checkIn, checkOut) {
-        const res = await this.searchHotels({ city, checkIn, checkOut });
-        return res.body;
+    async findHotels(city, checkIn, checkOut, adults = 2, children = 0) {
+        const dstRes = await this.searchDestinations(city);
+        const destinations = dstRes?.body?.result;
+        if (!Array.isArray(destinations) || destinations.length === 0) {
+            throw new common_1.InternalServerErrorException(`No destination found for city: ${city}`);
+        }
+        const destination = destinations[0];
+        const body = {
+            currency: 'USD',
+            long: destination.coordinates?.long ?? 0,
+            lat: destination.coordinates?.lat ?? 0,
+            rooms: [
+                {
+                    childAges: [],
+                    children,
+                    adults,
+                },
+            ],
+            checkOut,
+            checkIn,
+            destinationId: destination.id,
+        };
+        const hotelRes = await this.searchHotels(body);
+        const hotelBody = hotelRes?.body ?? hotelRes;
+        if (hotelBody?.success === false) {
+            console.warn('[findHotels] Hotel API returned failure', hotelBody);
+            return hotelBody;
+        }
+        return hotelBody;
+    }
+    async searchDestinations(query) {
+        return await this.mcpRequest('/mcp/hotel/search-destinations', {
+            type: 'DESTINATION',
+            query,
+        });
     }
     async revalidateFlight(fareSourceCode, key0) {
         const res = await this.mcpRequest('/mcp/flight/revalidate', {
@@ -86,8 +118,31 @@ let BookingsService = class BookingsService {
         });
         return res.body;
     }
+    async revalidateHotel(token, recommendationId, hotelId) {
+        const res = await this.mcpRequest('/mcp/hotel/revalidate', {
+            token,
+            recommendationId,
+            hotelId,
+        });
+        return res.body;
+    }
     async searchHotels(body) {
         return await this.mcpRequest('/mcp/hotel/search-hotels', body);
+    }
+    async getHotelDetails(hotelId) {
+        return await this.mcpRequest('/mcp/hotel/get-hotel-details', { hotelId });
+    }
+    async getRoomsAndRates(token, hotelId) {
+        return await this.mcpRequest('/mcp/hotel/get-rooms-and-rates', { token, hotelId });
+    }
+    async getPaymentUrl(params) {
+        return await this.mcpRequest('/mcp/hotel/get-payment-url', params);
+    }
+    async getBookingInfo(bookingId) {
+        return await this.mcpRequest('/mcp/hotel/get-booking-info', { bookingId });
+    }
+    async cancelBooking(bookingId) {
+        return await this.mcpRequest('/mcp/hotel/cancel-booking', { bookingId });
     }
     createBooking(dto) {
         const id = `b_${Date.now()}`;

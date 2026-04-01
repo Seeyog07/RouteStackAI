@@ -30,9 +30,51 @@ export class BookingsController {
   }
 
   // 3. PROXY: Matches your MCP structure
+  @Post('mcp/hotel/search-destinations')
+  async proxySearchDestinations(@Body() body: { type: string; query: string }) {
+    const res = await this.service.searchDestinations(body.query);
+    return res.body;
+  }
+
   @Post('mcp/hotel/search-hotels')
-  async proxySearchHotels(@Body() body: SearchHotelsDto) {
+  async proxySearchHotels(@Body() body: any) {
     const res = await this.service.searchHotels(body);
+    return res.body;
+  }
+
+  @Post('mcp/hotel/get-hotel-details')
+  async proxyGetHotelDetails(@Body() body: { hotelId: string }) {
+    const res = await this.service.getHotelDetails(body.hotelId);
+    return res.body;
+  }
+
+  @Post('mcp/hotel/get-rooms-and-rates')
+  async proxyGetRoomsAndRates(@Body() body: { token: string; hotelId: string }) {
+    const res = await this.service.getRoomsAndRates(body.token, body.hotelId);
+    return res.body;
+  }
+
+  @Post('mcp/hotel/get-payment-url')
+  async proxyGetPaymentUrl(@Body() body: any) {
+    const res = await this.service.getPaymentUrl(body);
+    return res.body;
+  }
+
+  @Post('mcp/hotel/revalidate')
+  async proxyRevalidateHotel(@Body() body: { token: string; recommendationId: string; hotelId: string }) {
+    const res = await this.service.revalidateHotel(body.token, body.recommendationId, body.hotelId);
+    return res.body;
+  }
+
+  @Post('mcp/hotel/get-booking-info')
+  async proxyGetBookingInfo(@Body() body: { bookingId: string }) {
+    const res = await this.service.getBookingInfo(body.bookingId);
+    return res.body;
+  }
+
+  @Post('mcp/hotel/cancel-booking')
+  async proxyCancelBooking(@Body() body: { bookingId: string }) {
+    const res = await this.service.cancelBooking(body.bookingId);
     return res.body;
   }
 

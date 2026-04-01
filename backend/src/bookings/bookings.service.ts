@@ -84,10 +84,50 @@ export class BookingsService {
     return res.body;
   }
 
-  // 2. Dynamic Hotel Search (Calls the helper)
-  async findHotels(city: string, checkIn: string, checkOut: string) {
-    const res = await this.searchHotels({ city, checkIn, checkOut });
-    return res.body;
+  // 2. Dynamic Hotel Search (orchestrated)
+  async findHotels(city: string, checkIn: string, checkOut: string, adults = 2, children = 0) {
+    // 2.1 Find destination by city
+    const dstRes = await this.searchDestinations(city);
+    const destinations = dstRes?.body?.result;
+
+    if (!Array.isArray(destinations) || destinations.length === 0) {
+      throw new InternalServerErrorException(`No destination found for city: ${city}`);
+    }
+
+    const destination = destinations[0];
+    const body: any = {
+      currency: 'USD',
+      long: destination.coordinates?.long ?? 0,
+      lat: destination.coordinates?.lat ?? 0,
+      rooms: [
+        {
+          childAges: [],
+          children,
+          adults,
+        },
+      ],
+      checkOut,
+      checkIn,
+      destinationId: destination.id,
+    };
+
+    const hotelRes = await this.searchHotels(body);
+
+    // Widen hotel result processed shape for downstream handling.
+    const hotelBody = hotelRes?.body ?? hotelRes;
+    if (hotelBody?.success === false) {
+      console.warn('[findHotels] Hotel API returned failure', hotelBody);
+      return hotelBody;
+    }
+
+    return hotelBody;
+  }
+
+  async searchDestinations(query: string) {
+    return await this.mcpRequest('/mcp/hotel/search-destinations', {
+      type: 'DESTINATION',
+      query,
+    });
   }
 
   // 2.1 Revalidate flight after selection
@@ -99,9 +139,48 @@ export class BookingsService {
     return res.body;
   }
 
-  // 3. The Actual Search Logic (referenced by your controller)
-  async searchHotels(body: SearchBody) {
+  async revalidateHotel(token: string, recommendationId: string, hotelId: string) {
+    const res = await this.mcpRequest('/mcp/hotel/revalidate', {
+      token,
+      recommendationId,
+      hotelId,
+    });
+    return res.body;
+  }
+
+  async searchHotels(body: any) {
     return await this.mcpRequest('/mcp/hotel/search-hotels', body);
+  }
+
+  async getHotelDetails(hotelId: string) {
+    return await this.mcpRequest('/mcp/hotel/get-hotel-details', { hotelId });
+  }
+
+  async getRoomsAndRates(token: string, hotelId: string) {
+    return await this.mcpRequest('/mcp/hotel/get-rooms-and-rates', { token, hotelId });
+  }
+
+  async getPaymentUrl(params: {
+    portalUrl: string;
+    priceCheckResult: any;
+    correlationId: string;
+    hotelName: string;
+    checkOut: string;
+    checkIn: string;
+    recommendationId: string;
+    roomId: string;
+    token: string;
+    hotelId: string;
+  }) {
+    return await this.mcpRequest('/mcp/hotel/get-payment-url', params);
+  }
+
+  async getBookingInfo(bookingId: string) {
+    return await this.mcpRequest('/mcp/hotel/get-booking-info', { bookingId });
+  }
+
+  async cancelBooking(bookingId: string) {
+    return await this.mcpRequest('/mcp/hotel/cancel-booking', { bookingId });
   }
 
   // 4. Booking Management

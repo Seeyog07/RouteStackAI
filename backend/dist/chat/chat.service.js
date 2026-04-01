@@ -53,7 +53,16 @@ let ChatService = class ChatService {
     extractCity(text) {
         const cityRegex = /(?:hotel\s+in|stay\s+in|room\s+in|at|in)\s+([a-z\s]+?)(?:\s|$|\.)/i;
         const match = text.match(cityRegex);
-        return match ? match[1].trim() : null;
+        if (match)
+            return match[1].trim();
+        const cleaned = text.trim();
+        const skipKeywords = ['flight', 'hotel', 'cancel', 'booking', 'help'];
+        if (cleaned.length > 1 &&
+            /^[a-zA-Z\s]+$/.test(cleaned) &&
+            !skipKeywords.some((kw) => cleaned.toLowerCase().includes(kw))) {
+            return cleaned;
+        }
+        return null;
     }
     validateFlightData(data) {
         if (!data.from)
@@ -73,6 +82,35 @@ let ChatService = class ChatService {
             return 'When is your check-out date? (format: YYYY-MM-DD)';
         return null;
     }
+    clearFlightFields(sess) {
+        sess.from = undefined;
+        sess.to = undefined;
+        sess.departureDate = undefined;
+        sess.returnDate = undefined;
+        sess.lastResults = undefined;
+        sess.choice = undefined;
+    }
+    clearHotelFields(sess) {
+        sess.city = undefined;
+        sess.checkIn = undefined;
+        sess.checkOut = undefined;
+        sess.adults = undefined;
+        sess.children = undefined;
+        sess.lastResults = undefined;
+        sess.choice = undefined;
+    }
+    setBookingType(sess, type) {
+        if (sess.bookingType !== type) {
+            sess.bookingType = type;
+            sess.state = 'idle';
+            if (type === 'flight') {
+                this.clearHotelFields(sess);
+            }
+            else {
+                this.clearFlightFields(sess);
+            }
+        }
+    }
     async handleMessage(sessionId, message) {
         const sess = this.sessions.get(sessionId);
         const text = (message || '').toLowerCase().trim();
@@ -81,6 +119,80 @@ let ChatService = class ChatService {
             return {
                 reply: "Hi! 👋 I can help you book flights or hotels. Try:\n• 'Book a flight from Mumbai to NYC'\n• 'Book a hotel in London'\n\nJust tell me what you need!",
             };
+        }
+        if (sess.bookingType === 'hotel') {
+            if (sess.state === 'awaiting_city' && originalMessage) {
+                sess.city = originalMessage.trim();
+                sess.state = 'awaiting_checkin';
+                return { reply: 'Great, got the city. What is your check-in date? (YYYY-MM-DD)' };
+            }
+            if (sess.state === 'awaiting_checkin' && originalMessage) {
+                sess.checkIn = originalMessage.trim();
+                sess.state = 'awaiting_checkout';
+                return { reply: 'Thanks. What is your check-out date? (YYYY-MM-DD)' };
+            }
+            if (sess.state === 'awaiting_checkout' && originalMessage) {
+                sess.checkOut = originalMessage.trim();
+                sess.state = 'hotel_ready';
+            }
+        }
+        if (/\b(?:book\s+flight|switch\s+to\s+flight|flight|fly|departure)\b/i.test(originalMessage)) {
+            this.setBookingType(sess, 'flight');
+            if (text.includes('from') && text.includes('to')) {
+            }
+            else {
+                return { reply: 'Sure, let’s book a flight. Where are you flying from and to (YYYY-MM-DD)?' };
+            }
+        }
+        if (/\b(?:book\s+hotel|switch\s+to\s+hotel|hotel|stay|room|accommodation)\b/i.test(originalMessage)) {
+            this.setBookingType(sess, 'hotel');
+            if (text.includes('in') && this.extractCity(originalMessage)) {
+            }
+            else {
+                return { reply: 'Sure, let’s book a hotel. Which city do you want to stay in?' };
+            }
+        }
+        if (text.includes('booking info') || text.includes('show booking')) {
+            const match = text.match(/(?:booking info|booking details|booking\s*#?)\s*(\w+)/i);
+            const bookingId = match?.[1];
+            if (!bookingId)
+                return { reply: 'Please provide a booking ID for lookup.' };
+            try {
+                const resp = await this.bookingsService.getBookingInfo(bookingId);
+                return { reply: `Booking info: ${JSON.stringify(resp, null, 2)}` };
+            }
+            catch (err) {
+                return { reply: `Could not fetch booking info for ${bookingId}.` };
+            }
+        }
+        if (text.includes('cancel booking')) {
+            const match = text.match(/cancel booking\s*(\w+)/i);
+            const bookingId = match?.[1];
+            if (!bookingId)
+                return { reply: 'Please provide a booking ID to cancel.' };
+            try {
+                const resp = await this.bookingsService.cancelBooking(bookingId);
+                return { reply: `Cancellation response: ${JSON.stringify(resp, null, 2)}` };
+            }
+            catch (err) {
+                console.error('Cancel booking error', err);
+                return { reply: `Could not cancel booking ${bookingId}.` };
+            }
+        }
+        if (text.includes('revalidate hotel') || text.includes('revalidate')) {
+            if (!sess.choice || !sess.choice.hotelId) {
+                return { reply: 'No hotel selected yet to revalidate. Please choose a hotel first.' };
+            }
+            const token = sess.choice.token || '';
+            const recommendationId = sess.choice.recommendationId || '';
+            try {
+                const resp = await this.bookingsService.revalidateHotel(token, recommendationId, sess.choice.hotelId);
+                return { reply: `Hotel revalidate response: ${JSON.stringify(resp, null, 2)}` };
+            }
+            catch (err) {
+                console.error('Hotel revalidation error', err);
+                return { reply: 'Could not revalidate hotel right now.' };
+            }
         }
         if (sess.state === 'completed') {
             const noPattern = /\b(no|nope|nah|not now|not anymore|stop|thanks?)\b/i;
@@ -172,6 +284,39 @@ let ChatService = class ChatService {
                 catch (error) {
                     console.error('Flight revalidation error:', error);
                     return { reply: 'Could not revalidate your selected flight right now. Please try again.' };
+                }
+            }
+            if (sess.bookingType === 'hotel') {
+                try {
+                    const detailsResp = await this.bookingsService.getHotelDetails(selected.id || selected.hotelId || '');
+                    const details = detailsResp?.body ?? detailsResp;
+                    const token = selected.token || details?.token || details?.result?.token || '';
+                    const roomRatesResp = token
+                        ? await this.bookingsService.getRoomsAndRates(token, selected.id || selected.hotelId || '')
+                        : null;
+                    const roomRates = roomRatesResp?.body ?? roomRatesResp;
+                    sess.choice = {
+                        ...selected,
+                        details,
+                        roomRates,
+                    };
+                    sess.state = 'awaiting_name';
+                    return {
+                        reply: `Excellent choice! ${selected?.name ?? 'Selected hotel'} has been locked. ` +
+                            `Hotel info loaded. Please provide guest full name to complete booking.`,
+                        cards: [
+                            { label: 'Hotel Details', value: details },
+                            { label: 'Room Rates', value: roomRates },
+                        ],
+                    };
+                }
+                catch (error) {
+                    console.error('Hotel details/rates error:', error);
+                    sess.choice = selected;
+                    sess.state = 'awaiting_name';
+                    return {
+                        reply: `Selected ${selected?.name ?? 'hotel'}. Unable to pre-fetch details now, but we can continue. Who should I book this for? (full name)`,
+                    };
                 }
             }
             sess.choice = selected;
@@ -267,18 +412,53 @@ let ChatService = class ChatService {
                 sess.checkIn = dates[0];
             if (dates.length > 1)
                 sess.checkOut = dates[1];
-            const validationError = this.validateHotelData(sess);
-            if (validationError) {
-                return { reply: validationError };
+            if (!sess.city) {
+                sess.state = 'awaiting_city';
+                return { reply: 'Which city would you like to book a hotel in?' };
+            }
+            if (!sess.checkIn) {
+                sess.state = 'awaiting_checkin';
+                return { reply: 'Please provide the check-in date (YYYY-MM-DD).' };
+            }
+            if (!sess.checkOut) {
+                sess.state = 'awaiting_checkout';
+                return { reply: 'Please provide the check-out date (YYYY-MM-DD).' };
             }
             sess.state = 'searching_hotels';
             try {
+                const destRes = await this.bookingsService.searchDestinations(sess.city);
+                const destData = destRes?.body ?? destRes;
+                const destinations = destData?.result ?? [];
+                if (!Array.isArray(destinations) || destinations.length === 0) {
+                    return {
+                        reply: `Could not find destination info for ${sess.city}. Please try a different city.`,
+                    };
+                }
                 const hotels = await this.bookingsService.findHotels(sess.city, sess.checkIn, sess.checkOut);
-                sess.lastResults = hotels;
+                const hotelsBody = hotels?.body ?? hotels;
+                if (hotelsBody?.success === false && hotelsBody?.code === 204) {
+                    return {
+                        reply: `No hotels available in ${sess.city} from ${sess.checkIn} to ${sess.checkOut}. ` +
+                            `Try different dates or a nearby city.`,
+                    };
+                }
+                const hotelItems = (hotelsBody?.result?.result && Array.isArray(hotelsBody.result.result))
+                    ? hotelsBody.result.result
+                    : Array.isArray(hotelsBody?.result)
+                        ? hotelsBody.result
+                        : Array.isArray(hotelsBody)
+                            ? hotelsBody
+                            : [];
+                if (!hotelItems.length) {
+                    return {
+                        reply: `No hotels found in ${sess.city} for ${sess.checkIn} to ${sess.checkOut}. Please try different dates or a nearby city.`,
+                    };
+                }
+                sess.lastResults = hotelItems;
                 sess.state = 'choosing_hotel';
                 return {
                     reply: `Perfect! I found hotels in ${sess.city} from ${sess.checkIn} to ${sess.checkOut}. Which one interests you?`,
-                    cards: hotels,
+                    cards: hotelItems,
                 };
             }
             catch (error) {

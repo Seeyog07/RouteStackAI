@@ -1,12 +1,34 @@
 import { BookingsService } from './bookings.service';
 import { CreateBookingDto } from './dto/create-booking.dto';
-import { SearchHotelsDto } from './dto/search-hotels.dto';
 export declare class BookingsController {
     private readonly service;
     constructor(service: BookingsService);
     getFlights(from: string, to: string): Promise<any>;
     getHotels(city: string, checkIn: string, checkOut: string): Promise<any>;
-    proxySearchHotels(body: SearchHotelsDto): Promise<any>;
+    proxySearchDestinations(body: {
+        type: string;
+        query: string;
+    }): Promise<any>;
+    proxySearchHotels(body: any): Promise<any>;
+    proxyGetHotelDetails(body: {
+        hotelId: string;
+    }): Promise<any>;
+    proxyGetRoomsAndRates(body: {
+        token: string;
+        hotelId: string;
+    }): Promise<any>;
+    proxyGetPaymentUrl(body: any): Promise<any>;
+    proxyRevalidateHotel(body: {
+        token: string;
+        recommendationId: string;
+        hotelId: string;
+    }): Promise<any>;
+    proxyGetBookingInfo(body: {
+        bookingId: string;
+    }): Promise<any>;
+    proxyCancelBooking(body: {
+        bookingId: string;
+    }): Promise<any>;
     createBooking(dto: CreateBookingDto): {
         createdAt: string;
         name: string;
