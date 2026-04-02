@@ -42,6 +42,7 @@ class HomePage extends StatefulWidget {
 
 class _HomePageState extends State<HomePage> {
   List<ChatMessage> messages = [];
+  final ScrollController _chatScrollController = ScrollController();
   final inputCtrl = TextEditingController();
   final cityCtrl = TextEditingController();
   final checkInCtrl = TextEditingController();
@@ -76,6 +77,16 @@ class _HomePageState extends State<HomePage> {
     sessionId = Uuid().v4();
     bookingService = BookingService(baseUrl: base);
     _bot('Hi — I can help you book flights or hotels. Try: "book a flight"');
+  }
+
+  @override
+  void dispose() {
+    _chatScrollController.dispose();
+    inputCtrl.dispose();
+    cityCtrl.dispose();
+    checkInCtrl.dispose();
+    checkOutCtrl.dispose();
+    super.dispose();
   }
 
   void _bot(String text) {
@@ -1006,11 +1017,7 @@ class _HomePageState extends State<HomePage> {
             'Route: ${it['departureCode'] ?? ''} -> ${it['arrivalCode'] ?? ''}, Date: ${it['departure'] ?? ''}',
       );
 
-      if (bookingId != null && bookingId.isNotEmpty) {
-        _bot('Flight payment initiated. Booking confirmed. Booking ID: $bookingId');
-      } else {
-        _bot('Flight payment initiated successfully.');
-      }
+      _bot('Flight payment initiated. Would you like to continue with any other booking?');
     } catch (e) {
       _bot('Unable to complete flight payment flow right now. Please try again.');
     } finally {
@@ -1033,7 +1040,7 @@ class _HomePageState extends State<HomePage> {
             _bot('Would you like to book a flight or a hotel?');
           },
           onBookingConfirmed: (bookingId) {
-            _bot('Booking confirmed. Booking ID: $bookingId');
+            _bot('Payment initiated. Would you like to continue with any other booking?');
           },
         );
       },
@@ -1098,16 +1105,25 @@ class _HomePageState extends State<HomePage> {
           Column(
             children: [
               Expanded(
-                child: ListView.builder(
-                  reverse: true,
-                  padding: const EdgeInsets.all(12),
-                  itemCount: messages.length,
-                  itemBuilder: (ctx, i) {
-                    final m = messages[i];
-                    return (m.cards != null && m.cards!.isNotEmpty)
-                        ? _buildCardMessage(m)
-                        : _buildTextMessage(m);
-                  },
+                child: Scrollbar(
+                  controller: _chatScrollController,
+                  thumbVisibility: true,
+                  trackVisibility: true,
+                  interactive: true,
+                  thickness: 10,
+                  radius: const Radius.circular(10),
+                  child: ListView.builder(
+                    controller: _chatScrollController,
+                    reverse: true,
+                    padding: const EdgeInsets.all(12),
+                    itemCount: messages.length,
+                    itemBuilder: (ctx, i) {
+                      final m = messages[i];
+                      return (m.cards != null && m.cards!.isNotEmpty)
+                          ? _buildCardMessage(m)
+                          : _buildTextMessage(m);
+                    },
+                  ),
                 ),
               ),
               _buildInputArea(),
@@ -1183,9 +1199,14 @@ class _HomePageState extends State<HomePage> {
   }
 
   Widget _buildCardMessage(ChatMessage m) {
+    final screenWidth = MediaQuery.of(context).size.width;
+    final preferredWidth = screenWidth * 0.86;
+    final maxCardWidth = preferredWidth > 780 ? 780.0 : preferredWidth;
+
     return Align(
       alignment: Alignment.centerLeft,
       child: Container(
+        constraints: BoxConstraints(maxWidth: maxCardWidth),
         margin: const EdgeInsets.symmetric(vertical: 8),
         padding: const EdgeInsets.all(12),
         decoration: BoxDecoration(
@@ -2677,6 +2698,29 @@ class _HomePageState extends State<HomePage> {
     );
   }
 
+  void _startNewChat() {
+    setState(() {
+      messages.clear();
+      sessionId = Uuid().v4();
+      loading = false;
+
+      _pendingBookingQuery = null;
+      _awaitingTravelerCounts = false;
+
+      lastSearchCity = null;
+      lastSearchCheckIn = null;
+      lastSearchCheckOut = null;
+      isWaitingForCheckOut = false;
+
+      lastDestinationId = null;
+      lastDestinationCode = null;
+      lastToken = null;
+      lastRecommendationId = null;
+    });
+
+    _bot('Hi — I can help you book flights or hotels. Try: "book a flight"');
+  }
+
   @override
   Widget build(BuildContext context) {
     return Scaffold(
@@ -2691,6 +2735,12 @@ class _HomePageState extends State<HomePage> {
         ),
         centerTitle: false,
         elevation: 8,
+        actions: [
+          IconButton(
+            onPressed: _startNewChat,
+            icon: const Icon(Icons.refresh, color: Colors.white),
+          ),
+        ],
         flexibleSpace: Container(
           decoration: BoxDecoration(
             gradient: LinearGradient(
