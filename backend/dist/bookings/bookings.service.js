@@ -12,6 +12,8 @@ const crypto = require("crypto");
 let BookingsService = class BookingsService {
     constructor() {
         this.bookings = [];
+        this.partnerTokenCache = null;
+        this.partnerTokenRequest = null;
         this.locationMap = {
             'new york': 'JFK',
             'nyc': 'JFK',
@@ -232,14 +234,73 @@ let BookingsService = class BookingsService {
             console.error('CRITICAL: Environment variables are missing!');
             throw new common_1.InternalServerErrorException('MCP Credentials missing in environment');
         }
+        const resolvedApiKey = apiKey;
+        const resolvedApiSecret = apiSecret;
+        const resolvedBaseUrl = BASE_URL;
+        const resolvedAuthBaseUrl = AUTH_BASE_URL;
         try {
+            const token = await this.getPartnerToken(resolvedApiKey, resolvedApiSecret, resolvedAuthBaseUrl, resolvedBaseUrl);
+            let dataRes = await globalThis.fetch(`${BASE_URL}${path}`, {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                    'Authorization': `Bearer ${token}`,
+                },
+                body: JSON.stringify(body),
+            });
+            if (dataRes.status === 401 || dataRes.status === 403) {
+                console.warn('MCP data request unauthorized, refreshing partner token and retrying once.');
+                this.invalidatePartnerToken(resolvedBaseUrl, resolvedAuthBaseUrl, resolvedApiKey);
+                const refreshedToken = await this.getPartnerToken(resolvedApiKey, resolvedApiSecret, resolvedAuthBaseUrl, resolvedBaseUrl);
+                dataRes = await globalThis.fetch(`${BASE_URL}${path}`, {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json',
+                        'Authorization': `Bearer ${refreshedToken}`,
+                    },
+                    body: JSON.stringify(body),
+                });
+            }
+            const data = await dataRes.json();
+            console.log('MCP Response Status:', dataRes.status);
+            console.log('--- MCP Debug End ---');
+            return { status: dataRes.status, body: data };
+        }
+        catch (e) {
+            const errorMessage = e instanceof Error ? e.message : 'MCP Request failed';
+            console.error('MCP Request Exception:', errorMessage);
+            throw new common_1.InternalServerErrorException(errorMessage);
+        }
+    }
+    invalidatePartnerToken(baseUrl, authBaseUrl, apiKey) {
+        if (this.partnerTokenCache &&
+            this.partnerTokenCache.baseUrl === baseUrl &&
+            this.partnerTokenCache.authBaseUrl === authBaseUrl &&
+            this.partnerTokenCache.apiKey === apiKey) {
+            this.partnerTokenCache = null;
+        }
+    }
+    async getPartnerToken(apiKey, apiSecret, authBaseUrl, baseUrl) {
+        const now = Date.now();
+        if (this.partnerTokenCache &&
+            this.partnerTokenCache.baseUrl === baseUrl &&
+            this.partnerTokenCache.authBaseUrl === authBaseUrl &&
+            this.partnerTokenCache.apiKey === apiKey &&
+            this.partnerTokenCache.expiresAt > now) {
+            return this.partnerTokenCache.token;
+        }
+        if (this.partnerTokenRequest) {
+            return await this.partnerTokenRequest;
+        }
+        this.partnerTokenRequest = (async () => {
             const ts = Math.floor(Date.now() / 1000);
             const nonce = crypto.randomUUID();
-            const hmac = crypto.createHmac('sha256', apiSecret)
+            const hmac = crypto
+                .createHmac('sha256', apiSecret)
                 .update(`${apiKey}:${ts}:${nonce}`)
                 .digest('base64url');
             console.log('Generated HMAC:', hmac);
-            const authRes = await globalThis.fetch(`${AUTH_BASE_URL}/mcp/auth/partner-token`, {
+            const authRes = await globalThis.fetch(`${authBaseUrl}/mcp/auth/partner-token`, {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({ apiKey, hmac, timestamp: ts, nonce }),
@@ -247,26 +308,32 @@ let BookingsService = class BookingsService {
             if (!authRes.ok) {
                 const errorText = await authRes.text();
                 console.error(`Auth Step Failed: ${authRes.status}`, errorText);
+                if (this.partnerTokenCache && this.partnerTokenCache.expiresAt > Date.now()) {
+                    console.warn('Auth failed, using cached partner token.');
+                    return this.partnerTokenCache.token;
+                }
                 throw new Error(`Auth failed: ${authRes.status}`);
             }
-            const { token } = await authRes.json();
+            const authBody = await authRes.json();
+            const token = authBody?.token?.toString();
+            if (!token) {
+                throw new Error('Auth failed: missing token in response');
+            }
+            this.partnerTokenCache = {
+                token,
+                expiresAt: Date.now() + 10 * 60 * 1000,
+                baseUrl,
+                authBaseUrl,
+                apiKey,
+            };
             console.log('Auth Token Received: ✅');
-            const dataRes = await globalThis.fetch(`${BASE_URL}${path}`, {
-                method: 'POST',
-                headers: {
-                    'Content-Type': 'application/json',
-                    'Authorization': `Bearer ${token}`
-                },
-                body: JSON.stringify(body),
-            });
-            const data = await dataRes.json();
-            console.log('MCP Response Status:', dataRes.status);
-            console.log('--- MCP Debug End ---');
-            return { status: dataRes.status, body: data };
+            return token;
+        })();
+        try {
+            return await this.partnerTokenRequest;
         }
-        catch (e) {
-            console.error('MCP Request Exception:', e.message);
-            throw new common_1.InternalServerErrorException(e instanceof Error ? e.message : 'MCP Request failed');
+        finally {
+            this.partnerTokenRequest = null;
         }
     }
 };

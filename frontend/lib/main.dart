@@ -598,6 +598,14 @@ class _HomePageState extends State<HomePage> {
     final price = it['ourprice'] ?? it['price'] ?? 'N/A';
     final isLikelyHotel = it is Map &&
         (it['starRating'] != null || it['heroImage'] != null || it['mainamenity'] != null);
+
+    final defaultRoomsConfig = [
+      {
+        'childAges': [],
+        'children': 0,
+        'adults': 2,
+      }
+    ];
     
     // Ensure hotel object has destinationId for booking
     if (it is Map && it['destinationId'] == null && lastDestinationId != null) {
@@ -613,6 +621,15 @@ class _HomePageState extends State<HomePage> {
     }
     if (it is Map && it['recommendationId'] == null && lastRecommendationId != null) {
       it['recommendationId'] = lastRecommendationId;
+    }
+    if (it is Map && (it['checkIn'] == null || it['checkIn'].toString().isEmpty) && lastSearchCheckIn != null) {
+      it['checkIn'] = lastSearchCheckIn;
+    }
+    if (it is Map && (it['checkOut'] == null || it['checkOut'].toString().isEmpty) && lastSearchCheckOut != null) {
+      it['checkOut'] = lastSearchCheckOut;
+    }
+    if (it is Map && it['rooms'] == null) {
+      it['rooms'] = defaultRoomsConfig;
     }
     
     // Add user message

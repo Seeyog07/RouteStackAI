@@ -7,6 +7,14 @@ type SearchBody = { city: string; checkIn: string; checkOut: string };
 @Injectable()
 export class BookingsService {
   private bookings: any[] = [];
+  private partnerTokenCache: {
+    token: string;
+    expiresAt: number;
+    baseUrl: string;
+    authBaseUrl: string;
+    apiKey: string;
+  } | null = null;
+  private partnerTokenRequest: Promise<string> | null = null;
 
   // Location code mapping (city name → airport code)
   private locationMap: { [key: string]: string } = {
@@ -326,40 +334,36 @@ export class BookingsService {
     throw new InternalServerErrorException('MCP Credentials missing in environment');
   }
 
+  const resolvedApiKey = apiKey as string;
+  const resolvedApiSecret = apiSecret as string;
+  const resolvedBaseUrl = BASE_URL as string;
+  const resolvedAuthBaseUrl = AUTH_BASE_URL as string;
+
   try {
-    const ts = Math.floor(Date.now() / 1000);
-    const nonce = crypto.randomUUID();
-    const hmac = crypto.createHmac('sha256', apiSecret)
-      .update(`${apiKey}:${ts}:${nonce}`)
-      .digest('base64url');
+    const token = await this.getPartnerToken(resolvedApiKey, resolvedApiSecret, resolvedAuthBaseUrl, resolvedBaseUrl);
 
-    console.log('Generated HMAC:', hmac);
-
-    // Auth Token Step
-    const authRes = await (globalThis as any).fetch(`${AUTH_BASE_URL}/mcp/auth/partner-token`, {
+    let dataRes = await (globalThis as any).fetch(`${BASE_URL}${path}`, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ apiKey, hmac, timestamp: ts, nonce }),
-    });
-
-    if (!authRes.ok) {
-      const errorText = await authRes.text();
-      console.error(`Auth Step Failed: ${authRes.status}`, errorText);
-      throw new Error(`Auth failed: ${authRes.status}`);
-    }
-
-    const { token } = await authRes.json();
-    console.log('Auth Token Received: ✅');
-
-    // Search Data Step
-    const dataRes = await (globalThis as any).fetch(`${BASE_URL}${path}`, {
-      method: 'POST',
-      headers: { 
-        'Content-Type': 'application/json', 
-        'Authorization': `Bearer ${token}` 
+      headers: {
+        'Content-Type': 'application/json',
+        'Authorization': `Bearer ${token}`,
       },
       body: JSON.stringify(body),
     });
+
+    if (dataRes.status === 401 || dataRes.status === 403) {
+      console.warn('MCP data request unauthorized, refreshing partner token and retrying once.');
+      this.invalidatePartnerToken(resolvedBaseUrl, resolvedAuthBaseUrl, resolvedApiKey);
+      const refreshedToken = await this.getPartnerToken(resolvedApiKey, resolvedApiSecret, resolvedAuthBaseUrl, resolvedBaseUrl);
+      dataRes = await (globalThis as any).fetch(`${BASE_URL}${path}`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${refreshedToken}`,
+        },
+        body: JSON.stringify(body),
+      });
+    }
 
     const data = await dataRes.json();
     console.log('MCP Response Status:', dataRes.status);
@@ -367,8 +371,95 @@ export class BookingsService {
 
     return { status: dataRes.status, body: data };
   } catch (e) {
-    console.error('MCP Request Exception:', e.message);
-    throw new InternalServerErrorException(e instanceof Error ? e.message : 'MCP Request failed');
+    const errorMessage = e instanceof Error ? e.message : 'MCP Request failed';
+    console.error('MCP Request Exception:', errorMessage);
+    throw new InternalServerErrorException(errorMessage);
   }
 }
+
+  private invalidatePartnerToken(baseUrl: string, authBaseUrl: string, apiKey: string) {
+    if (
+      this.partnerTokenCache &&
+      this.partnerTokenCache.baseUrl === baseUrl &&
+      this.partnerTokenCache.authBaseUrl === authBaseUrl &&
+      this.partnerTokenCache.apiKey === apiKey
+    ) {
+      this.partnerTokenCache = null;
+    }
+  }
+
+  private async getPartnerToken(
+    apiKey: string,
+    apiSecret: string,
+    authBaseUrl: string,
+    baseUrl: string,
+  ): Promise<string> {
+    const now = Date.now();
+    if (
+      this.partnerTokenCache &&
+      this.partnerTokenCache.baseUrl === baseUrl &&
+      this.partnerTokenCache.authBaseUrl === authBaseUrl &&
+      this.partnerTokenCache.apiKey === apiKey &&
+      this.partnerTokenCache.expiresAt > now
+    ) {
+      return this.partnerTokenCache.token;
+    }
+
+    if (this.partnerTokenRequest) {
+      return await this.partnerTokenRequest;
+    }
+
+    this.partnerTokenRequest = (async () => {
+      const ts = Math.floor(Date.now() / 1000);
+      const nonce = crypto.randomUUID();
+      const hmac = crypto
+        .createHmac('sha256', apiSecret)
+        .update(`${apiKey}:${ts}:${nonce}`)
+        .digest('base64url');
+
+      console.log('Generated HMAC:', hmac);
+
+      const authRes = await (globalThis as any).fetch(`${authBaseUrl}/mcp/auth/partner-token`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ apiKey, hmac, timestamp: ts, nonce }),
+      });
+
+      if (!authRes.ok) {
+        const errorText = await authRes.text();
+        console.error(`Auth Step Failed: ${authRes.status}`, errorText);
+
+        if (this.partnerTokenCache && this.partnerTokenCache.expiresAt > Date.now()) {
+          console.warn('Auth failed, using cached partner token.');
+          return this.partnerTokenCache.token;
+        }
+
+        throw new Error(`Auth failed: ${authRes.status}`);
+      }
+
+      const authBody = await authRes.json();
+      const token = authBody?.token?.toString();
+
+      if (!token) {
+        throw new Error('Auth failed: missing token in response');
+      }
+
+      this.partnerTokenCache = {
+        token,
+        expiresAt: Date.now() + 10 * 60 * 1000,
+        baseUrl,
+        authBaseUrl,
+        apiKey,
+      };
+
+      console.log('Auth Token Received: ✅');
+      return token;
+    })();
+
+    try {
+      return await this.partnerTokenRequest;
+    } finally {
+      this.partnerTokenRequest = null;
+    }
+  }
 }

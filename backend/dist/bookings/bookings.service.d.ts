@@ -1,6 +1,8 @@
 import { CreateBookingDto } from './dto/create-booking.dto';
 export declare class BookingsService {
     private bookings;
+    private partnerTokenCache;
+    private partnerTokenRequest;
     private locationMap;
     private normalizeLocation;
     findFlights(from: string, to: string, departureDate?: string): Promise<any>;
@@ -76,4 +78,6 @@ export declare class BookingsService {
     };
     listBookings(): any[];
     private mcpRequest;
+    private invalidatePartnerToken;
+    private getPartnerToken;
 }

@@ -91,6 +91,7 @@ class _ImageCarouselWidgetState extends State<ImageCarouselWidget> {
           ClipRRect(
             borderRadius: BorderRadius.circular(12),
             child: GestureDetector(
+              behavior: HitTestBehavior.opaque,
               onTap: () => _openLightbox(context, viewModel),
               child: Container(
                 height: 300,
@@ -157,30 +158,34 @@ class _ImageCarouselWidgetState extends State<ImageCarouselWidget> {
           Positioned(
             right: 12,
             bottom: 12,
-            child: Container(
-              decoration: BoxDecoration(
-                color: Colors.black54,
-                borderRadius: BorderRadius.circular(6),
-              ),
-              padding: EdgeInsets.symmetric(horizontal: 8, vertical: 4),
-              child: Row(
-                mainAxisSize: MainAxisSize.min,
-                children: [
-                  Icon(
-                    Icons.fullscreen,
-                    color: Colors.white,
-                    size: 16,
-                  ),
-                  SizedBox(width: 4),
-                  Text(
-                    'Click to expand',
-                    style: TextStyle(
+            child: GestureDetector(
+              behavior: HitTestBehavior.opaque,
+              onTap: () => _openLightbox(context, viewModel),
+              child: Container(
+                decoration: BoxDecoration(
+                  color: Colors.black54,
+                  borderRadius: BorderRadius.circular(6),
+                ),
+                padding: EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                child: Row(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    Icon(
+                      Icons.fullscreen,
                       color: Colors.white,
-                      fontSize: 12,
-                      fontWeight: FontWeight.w500,
+                      size: 16,
                     ),
-                  ),
-                ],
+                    SizedBox(width: 4),
+                    Text(
+                      'Click to expand',
+                      style: TextStyle(
+                        color: Colors.white,
+                        fontSize: 12,
+                        fontWeight: FontWeight.w500,
+                      ),
+                    ),
+                  ],
+                ),
               ),
             ),
           ),

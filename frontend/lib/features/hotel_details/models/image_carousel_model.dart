@@ -19,6 +19,26 @@ class ImageGalleryModel {
         if (image['url'] is String) url = image['url'];
         else if (image['href'] is String) url = image['href'];
         else if (image['heroImage'] is String) url = image['heroImage'];
+        else if (image['links'] is List) {
+          for (final link in image['links'] as List) {
+            if (link is Map && link['url'] is String) {
+              url = link['url'] as String;
+              break;
+            }
+          }
+        } else if (image['links'] is Map) {
+          final linksMap = image['links'] as Map;
+          for (final entry in linksMap.values) {
+            if (entry is Map && entry['url'] is String) {
+              url = entry['url'] as String;
+              break;
+            }
+            if (entry is String && entry.startsWith('http')) {
+              url = entry;
+              break;
+            }
+          }
+        }
         
         if (url != null) urls.add(url);
       }
