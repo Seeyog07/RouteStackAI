@@ -1998,6 +1998,11 @@ class _HomePageState extends State<HomePage> {
   }
 
   Widget _buildHotelOptionCard(dynamic it) {
+    final starRating = it['starRating'] is num
+        ? (it['starRating'] as num).toDouble()
+        : double.tryParse(it['starRating']?.toString() ?? '');
+    final starCount = starRating != null ? starRating.floor() : 0;
+
     return Card(
       elevation: 2,
       margin: const EdgeInsets.symmetric(vertical: 6),
@@ -2029,10 +2034,10 @@ class _HomePageState extends State<HomePage> {
                   child: Text(it['name'] ?? 'Hotel Option',
                       style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 16)),
                 ),
-                if (it['starRating'] != null && it['starRating'] > 0)
+                if (starCount > 0)
                   Row(
                     children: List.generate(
-                      it['starRating'],
+                      starCount,
                       (index) => const Icon(Icons.star, color: Colors.amber, size: 16),
                     ),
                   ),
@@ -2285,6 +2290,24 @@ class _HomePageState extends State<HomePage> {
               '')
           : '';
 
+        final today = DateTime.now();
+        final tomorrow = DateTime.now().add(const Duration(days: 1));
+        final checkIn = hotel['checkIn']?.toString().isNotEmpty == true
+          ? hotel['checkIn'].toString()
+          : '${today.year}-${today.month.toString().padLeft(2, '0')}-${today.day.toString().padLeft(2, '0')}';
+        final checkOut = hotel['checkOut']?.toString().isNotEmpty == true
+          ? hotel['checkOut'].toString()
+          : '${tomorrow.year}-${tomorrow.month.toString().padLeft(2, '0')}-${tomorrow.day.toString().padLeft(2, '0')}';
+        final rooms = (hotel['rooms'] is List && (hotel['rooms'] as List).isNotEmpty)
+          ? hotel['rooms']
+          : [
+            {
+            'childAges': [],
+            'children': 0,
+            'adults': 2,
+            }
+          ];
+
       // Fetch room rates from backend proxy using the token
       dynamic rates;
       if (token is String && token.isNotEmpty) {
@@ -2294,6 +2317,9 @@ class _HomePageState extends State<HomePage> {
           body: json.encode({
             'token': token,
             'hotelId': hotel['id'],
+            'checkIn': checkIn,
+            'checkOut': checkOut,
+            'rooms': rooms,
           }),
         );
 
@@ -2301,7 +2327,7 @@ class _HomePageState extends State<HomePage> {
             'Hotel rooms/rates response status: ${ratesResponse.statusCode}');
         debugPrint('Hotel rooms/rates response body: ${ratesResponse.body}');
 
-        if (ratesResponse.statusCode == 200) {
+        if (ratesResponse.statusCode == 200 || ratesResponse.statusCode == 201) {
           rates = json.decode(ratesResponse.body);
         } else {
           debugPrint('Room rates load failed; showing details without rates.');

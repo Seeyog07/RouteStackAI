@@ -75,15 +75,33 @@ class BookingService {
     List<dynamic>? rooms,
   }) async {
     try {
+      final today = DateTime.now();
+      final tomorrow = DateTime.now().add(const Duration(days: 1));
+      final effectiveCheckIn = checkIn.isNotEmpty
+          ? checkIn
+          : '${today.year}-${today.month.toString().padLeft(2, '0')}-${today.day.toString().padLeft(2, '0')}';
+      final effectiveCheckOut = checkOut.isNotEmpty
+          ? checkOut
+          : '${tomorrow.year}-${tomorrow.month.toString().padLeft(2, '0')}-${tomorrow.day.toString().padLeft(2, '0')}';
+      final effectiveRooms = (rooms != null && rooms.isNotEmpty)
+          ? rooms
+          : [
+              {
+                'childAges': [],
+                'children': 0,
+                'adults': 2,
+              }
+            ];
+
       final response = await http.post(
         Uri.parse('$baseUrl/mcp/hotel/get-rooms-and-rates'),
         headers: {'Content-Type': 'application/json'},
         body: json.encode({
           'token': token,
           'hotelId': hotelId,
-          if (checkIn.isNotEmpty) 'checkIn': checkIn,
-          if (checkOut.isNotEmpty) 'checkOut': checkOut,
-          if (rooms != null && rooms.isNotEmpty) 'rooms': rooms,
+          'checkIn': effectiveCheckIn,
+          'checkOut': effectiveCheckOut,
+          'rooms': effectiveRooms,
         }),
       );
 

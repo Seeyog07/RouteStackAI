@@ -72,8 +72,17 @@ class _BookingConfirmationDialogState extends State<BookingConfirmationDialog> {
 
     if (revalidation.success) {
       // Extract check-in/check-out from hotel object if available
-      final checkIn = widget.hotel['checkIn']?.toString() ?? '';
-      final checkOut = widget.hotel['checkOut']?.toString() ?? '';
+      String checkIn = widget.hotel['checkIn']?.toString() ?? '';
+      String checkOut = widget.hotel['checkOut']?.toString() ?? '';
+
+      if (checkIn.isEmpty) {
+        final today = DateTime.now();
+        checkIn = '${today.year}-${today.month.toString().padLeft(2, '0')}-${today.day.toString().padLeft(2, '0')}';
+      }
+      if (checkOut.isEmpty) {
+        final tomorrow = DateTime.now().add(const Duration(days: 1));
+        checkOut = '${tomorrow.year}-${tomorrow.month.toString().padLeft(2, '0')}-${tomorrow.day.toString().padLeft(2, '0')}';
+      }
       
       // Default rooms config if not in hotel object
       final roomsConfig = widget.hotel['rooms'] ?? [
