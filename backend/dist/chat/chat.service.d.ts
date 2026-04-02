@@ -12,6 +12,9 @@ export declare class ChatService {
     private clearFlightFields;
     private clearHotelFields;
     private setBookingType;
+    private isBookingInfoRequest;
+    private isCancelBookingRequest;
+    private extractBookingId;
     handleMessage(sessionId: string, message: string): Promise<{
         reply: string;
         booking?: undefined;

@@ -58,6 +58,12 @@ let BookingsController = class BookingsController {
         const res = await this.service.revalidateHotel(body.token, body.recommendationId, body.hotelId);
         return res.body;
     }
+    async proxyRevalidateFlight(body) {
+        return await this.service.revalidateFlight(body.fareSourceCode, Number(body.key_0));
+    }
+    async proxyGetFlightPaymentUrl(body) {
+        return await this.service.getFlightPaymentUrl(body);
+    }
     async proxyGetBookingInfo(body) {
         const res = await this.service.getBookingInfo(body.bookingId);
         return res.body;
@@ -155,6 +161,20 @@ __decorate([
     __metadata("design:paramtypes", [Object]),
     __metadata("design:returntype", Promise)
 ], BookingsController.prototype, "proxyRevalidateHotel", null);
+__decorate([
+    (0, common_1.Post)('mcp/flight/revalidate'),
+    __param(0, (0, common_1.Body)()),
+    __metadata("design:type", Function),
+    __metadata("design:paramtypes", [Object]),
+    __metadata("design:returntype", Promise)
+], BookingsController.prototype, "proxyRevalidateFlight", null);
+__decorate([
+    (0, common_1.Post)('mcp/flight/get-payment-url'),
+    __param(0, (0, common_1.Body)()),
+    __metadata("design:type", Function),
+    __metadata("design:paramtypes", [Object]),
+    __metadata("design:returntype", Promise)
+], BookingsController.prototype, "proxyGetFlightPaymentUrl", null);
 __decorate([
     (0, common_1.Post)('mcp/hotel/get-booking-info'),
     __param(0, (0, common_1.Body)()),

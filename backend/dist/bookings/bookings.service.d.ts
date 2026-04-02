@@ -10,6 +10,18 @@ export declare class BookingsService {
         body: any;
     }>;
     revalidateFlight(fareSourceCode: string, key0: number): Promise<any>;
+    getFlightPaymentUrl(params: {
+        fareSourceCode: string;
+        key_0?: number;
+        key0?: number;
+        revalidateResult?: any;
+        priceCheckResult?: any;
+        selectedFlight?: any;
+        portalUrl?: string;
+        origin?: string;
+        destination?: string;
+        departureDate?: string;
+    }): Promise<any>;
     revalidateHotel(token: string, recommendationId: string, hotelId: string): Promise<any>;
     searchHotels(body: any): Promise<{
         status: any;

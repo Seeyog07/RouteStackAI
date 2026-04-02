@@ -16,6 +16,8 @@ interface SessionData {
   children?: number;
   lastResults?: any[];
   choice?: any;
+  lastBookingId?: string;
+  lastBookingIntent?: 'info' | 'cancel';
 }
 
 @Injectable()
@@ -42,18 +44,22 @@ export class ChatService {
 
   private extractLocations(text: string): { from?: string; to?: string } {
     // Try multiple patterns to capture locations
+    const cleanedInput = text
+      .replace(/\b(?:book|a|an|flight|flights|fly|please|search|find)\b/gi, ' ')
+      .replace(/\s+/g, ' ')
+      .trim();
     
     // Pattern 1: "from X to Y" or "from X and Y"
-    let fromToRegex = /(?:from|departure|origin|starting?\s+(?:from|at))\s+([a-z\s]+?)(?:\s+to\s+|\s+and\s+|\s*→\s*|\s*-\s*)([a-z\s]+?)(?:\s+on|\s+in|$|\.)/i;
-    let match = text.match(fromToRegex);
+    let fromToRegex = /(?:from|departure|origin|starting?\s+(?:from|at))\s+([a-z\s]+?)(?:\s+to\s+|\s+and\s+|\s*→\s*|\s*-\s*)([a-z\s]+?)(?:\s+on|\s+in|\s+for|\s+with|$|\.|,)/i;
+    let match = cleanedInput.match(fromToRegex);
     if (match) {
       console.log('[extractLocations] Pattern 1 matched:', match[1], '→', match[2]);
       return { from: match[1].trim(), to: match[2].trim() };
     }
 
     // Pattern 2: "X to Y" (simpler, no "from" keyword)
-    fromToRegex = /([a-z\s]+?)\s+to\s+([a-z\s]+?)(?:\s+on|\s+in|$|\.)/i;
-    match = text.match(fromToRegex);
+    fromToRegex = /([a-z\s]+?)\s+to\s+([a-z\s]+?)(?:\s+on|\s+in|\s+for|\s+with|$|\.|,)/i;
+    match = cleanedInput.match(fromToRegex);
     if (match) {
       // Make sure it's not matching something like "talk to"
       const firstPart = match[1].toLowerCase();
@@ -145,16 +151,89 @@ export class ChatService {
     }
   }
 
+  private isBookingInfoRequest(text: string): boolean {
+    return /\b(?:booking|reservation)\s*(?:info|information|details?|status)\b/i.test(text) ||
+      /\b(?:show|get|find|fetch|view|tell\s+me|what(?:'s| is)|give\s+me)\b.*\b(?:booking|reservation)\b/i.test(text);
+  }
+
+  private isCancelBookingRequest(text: string): boolean {
+    return /\b(?:cancel|void|delete|remove)\b.*\b(?:booking|reservation)\b/i.test(text) ||
+      /\bcancel\s+(?:my\s+)?(?:booking|reservation)\b/i.test(text);
+  }
+
+  private extractBookingId(text: string, sess?: SessionData): string | null {
+    const explicitIdMatch = text.match(/\b(b_\d+)\b/i) || text.match(/\bbooking\s*(?:id|#|number)?\s*[:\-]?\s*(b_\d+)\b/i);
+    if (explicitIdMatch?.[1]) {
+      return explicitIdMatch[1];
+    }
+
+    if (sess?.lastBookingId && /\b(?:it|this|that|the\s+booking|my\s+booking)\b/i.test(text)) {
+      return sess.lastBookingId;
+    }
+
+    return null;
+  }
+
   async handleMessage(sessionId: string, message: string) {
     const sess = this.sessions.get(sessionId);
     const text = (message || '').toLowerCase().trim();
     const originalMessage = message.trim();
 
-    // Handle greeting
-    if (text.includes('hi') || text.includes('hello') || text.includes('help')) {
+    // Handle greeting (word-bounded so tokens like "children" don't trigger "hi")
+    if (/\b(?:hi|hello|help)\b/i.test(text)) {
       return {
         reply: "Hi! 👋 I can help you book flights or hotels. Try:\n• 'Book a flight from Mumbai to NYC'\n• 'Book a hotel in London'\n\nJust tell me what you need!",
       };
+    }
+
+    // --- BOOKING INFO / CANCELLATION INTENTS ---
+    if (this.isBookingInfoRequest(originalMessage) || this.isCancelBookingRequest(originalMessage)) {
+      const bookingId = this.extractBookingId(originalMessage, sess);
+
+      if (this.isBookingInfoRequest(originalMessage)) {
+        if (!bookingId) {
+          return { reply: 'Please provide a booking ID for lookup.' };
+        }
+
+        sess.lastBookingId = bookingId;
+        sess.lastBookingIntent = 'info';
+
+        try {
+          const resp = await this.bookingsService.getBookingInfo(bookingId);
+          const body = resp?.body ?? resp;
+
+          if (body?.success === false && body?.message) {
+            return { reply: `I could not fetch booking info for ${bookingId}: ${body.message}` };
+          }
+
+          return { reply: `Booking info for ${bookingId}: ${JSON.stringify(body, null, 2)}` };
+        } catch (err) {
+          return { reply: `Could not fetch booking info for ${bookingId}.` };
+        }
+      }
+
+      if (this.isCancelBookingRequest(originalMessage)) {
+        if (!bookingId) {
+          return { reply: 'Please provide a booking ID to cancel.' };
+        }
+
+        sess.lastBookingId = bookingId;
+        sess.lastBookingIntent = 'cancel';
+
+        try {
+          const resp = await this.bookingsService.cancelBooking(bookingId);
+          const body = resp?.body ?? resp;
+
+          if (body?.success === false && body?.message) {
+            return { reply: `I could not cancel booking ${bookingId}: ${body.message}` };
+          }
+
+          return { reply: `Cancellation response for ${bookingId}: ${JSON.stringify(body, null, 2)}` };
+        } catch (err) {
+          console.error('Cancel booking error', err);
+          return { reply: `Could not cancel booking ${bookingId}.` };
+        }
+      }
     }
 
     // --- STATEFUL HOTEL FIELD COLLECTION ---
@@ -181,9 +260,8 @@ export class ChatService {
     // --- DYNAMIC BOOKING-TYPE SWITCH (flight/hotel) ---
     if (/\b(?:book\s+flight|switch\s+to\s+flight|flight|fly|departure)\b/i.test(originalMessage)) {
       this.setBookingType(sess, 'flight');
-      if (text.includes('from') && text.includes('to')) {
-        // we can continue with existing flight parsing below
-      } else {
+      const parsedRoute = this.extractLocations(originalMessage);
+      if (!parsedRoute.from && !parsedRoute.to && !this.extractDates(originalMessage).length) {
         return { reply: 'Sure, let’s book a flight. Where are you flying from and to (YYYY-MM-DD)?' };
       }
     }
@@ -194,32 +272,6 @@ export class ChatService {
         // continue parsing below with city extracted
       } else {
         return { reply: 'Sure, let’s book a hotel. Which city do you want to stay in?' };
-      }
-    }
-
-    // --- QUICK COMMANDS ---
-    if (text.includes('booking info') || text.includes('show booking')) {
-      const match = text.match(/(?:booking info|booking details|booking\s*#?)\s*(\w+)/i);
-      const bookingId = match?.[1];
-      if (!bookingId) return { reply: 'Please provide a booking ID for lookup.' };
-      try {
-        const resp = await this.bookingsService.getBookingInfo(bookingId);
-        return { reply: `Booking info: ${JSON.stringify(resp, null, 2)}` };
-      } catch (err) {
-        return { reply: `Could not fetch booking info for ${bookingId}.` };
-      }
-    }
-
-    if (text.includes('cancel booking')) {
-      const match = text.match(/cancel booking\s*(\w+)/i);
-      const bookingId = match?.[1];
-      if (!bookingId) return { reply: 'Please provide a booking ID to cancel.' };
-      try {
-        const resp = await this.bookingsService.cancelBooking(bookingId);
-        return { reply: `Cancellation response: ${JSON.stringify(resp, null, 2)}` };
-      } catch (err) {
-        console.error('Cancel booking error', err);
-        return { reply: `Could not cancel booking ${bookingId}.` };
       }
     }
 
@@ -370,10 +422,10 @@ export class ChatService {
           return {
             reply: `Excellent choice! ${selected?.name ?? 'Selected hotel'} has been locked. ` +
               `Hotel info loaded. Please provide guest full name to complete booking.`,
-            cards: [
-              { label: 'Hotel Details', value: details },
-              { label: 'Room Rates', value: roomRates },
-            ],
+            // cards: [
+            //   { label: 'Hotel Details', value: details },
+            //   { label: 'Room Rates', value: roomRates },
+            // ],
           };
         } catch (error) {
           console.error('Hotel details/rates error:', error);
@@ -433,6 +485,22 @@ export class ChatService {
       console.log(`[Flight Booking] Extracted locations: from="${from}", to="${to}"`);
       if (from) sess.from = from;
       if (to) sess.to = to;
+
+      // Single-city follow-up messages can fill missing route parts.
+      if (!from && !to) {
+        const trimmed = originalMessage.trim();
+        if (
+          /^[a-zA-Z\s]+$/.test(trimmed) &&
+          trimmed.length > 1 &&
+          !/\b(?:book|flight|fly|departure|adults?|children?|date|from|to|on|for|with)\b/i.test(trimmed)
+        ) {
+          if (!sess.from) {
+            sess.from = trimmed;
+          } else if (!sess.to) {
+            sess.to = trimmed;
+          }
+        }
+      }
 
       // Extract departure date
       const dates = this.extractDates(originalMessage);
@@ -497,8 +565,18 @@ export class ChatService {
       if (countryFromMessage) sess.country = countryFromMessage;
 
       const dates = this.extractDates(originalMessage);
-      if (dates.length > 0) sess.checkIn = dates[0];
-      if (dates.length > 1) sess.checkOut = dates[1];
+      if (dates.length > 1) {
+        // Full range present in one message.
+        sess.checkIn = dates[0];
+        sess.checkOut = dates[1];
+      } else if (dates.length == 1) {
+        // Single date should fill whichever value is still missing.
+        if (!sess.checkIn) {
+          sess.checkIn = dates[0];
+        } else if (!sess.checkOut) {
+          sess.checkOut = dates[0];
+        }
+      }
 
       // Step-by-step required information prompts
       if (!sess.city) {

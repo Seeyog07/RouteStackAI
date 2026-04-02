@@ -67,6 +67,16 @@ export class BookingsController {
     return res.body;
   }
 
+  @Post('mcp/flight/revalidate')
+  async proxyRevalidateFlight(@Body() body: { fareSourceCode: string; key_0: number }) {
+    return await this.service.revalidateFlight(body.fareSourceCode, Number(body.key_0));
+  }
+
+  @Post('mcp/flight/get-payment-url')
+  async proxyGetFlightPaymentUrl(@Body() body: any) {
+    return await this.service.getFlightPaymentUrl(body);
+  }
+
   @Post('mcp/hotel/get-booking-info')
   async proxyGetBookingInfo(@Body() body: { bookingId: string }) {
     const res = await this.service.getBookingInfo(body.bookingId);

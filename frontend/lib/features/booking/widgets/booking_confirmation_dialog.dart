@@ -7,13 +7,17 @@ import '../services/booking_service.dart';
 class BookingConfirmationDialog extends StatefulWidget {
   final dynamic hotel;
   final BookingService bookingService;
-  final VoidCallback onClose;
+  final VoidCallback? onClose;
+  final VoidCallback? onCancel;
+  final ValueChanged<String>? onBookingConfirmed;
 
   const BookingConfirmationDialog({
     Key? key,
     required this.hotel,
     required this.bookingService,
-    required this.onClose,
+    this.onClose,
+    this.onCancel,
+    this.onBookingConfirmed,
   }) : super(key: key);
 
   @override
@@ -118,10 +122,22 @@ class _BookingConfirmationDialogState extends State<BookingConfirmationDialog> {
 
       if (mounted) {
         if (paymentResult.success && paymentResult.paymentUrl != null) {
+          final bookingId = await widget.bookingService.createBookingRecord(
+            name: 'Hotel Guest',
+            type: 'hotel',
+            itemId: booking.hotel['id']?.toString() ?? 'unknown_hotel',
+            details: 'Room: $_selectedRoomId, Hotel: ${booking.hotelName ?? 'Unknown'}',
+          );
+
           // Launch payment URL
           final url = Uri.parse(paymentResult.paymentUrl!);
           if (await canLaunchUrl(url)) {
             await launchUrl(url, mode: LaunchMode.externalApplication);
+
+            if (bookingId != null && bookingId.isNotEmpty) {
+              widget.onBookingConfirmed?.call(bookingId);
+              Navigator.of(context).pop();
+            }
           } else {
             ScaffoldMessenger.of(context).showSnackBar(
               SnackBar(content: Text('Could not open payment URL')),
@@ -324,7 +340,7 @@ class _BookingConfirmationDialogState extends State<BookingConfirmationDialog> {
                 icon: Icon(Icons.close, color: Colors.white),
                 onPressed: () {
                   Navigator.of(context).pop();
-                  widget.onClose();
+                  (widget.onCancel ?? widget.onClose)?.call();
                 },
               ),
             ],
@@ -541,7 +557,7 @@ class _BookingConfirmationDialogState extends State<BookingConfirmationDialog> {
                 ? null
                 : () {
                     Navigator.of(context).pop();
-                    widget.onClose();
+                    (widget.onCancel ?? widget.onClose)?.call();
                   },
             child: Text('Cancel'),
           ),

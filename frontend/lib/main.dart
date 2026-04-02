@@ -1,9 +1,11 @@
 import 'dart:convert';
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:http/http.dart' as http;
 import 'package:uuid/uuid.dart';
 import 'package:flutter_svg/flutter_svg.dart';
+import 'package:url_launcher/url_launcher.dart';
 import 'features/hotel_details/models/image_carousel_model.dart';
 import 'features/hotel_details/widgets/image_carousel_widget.dart';
 import 'features/booking/services/booking_service.dart';
@@ -60,6 +62,9 @@ class _HomePageState extends State<HomePage> {
   String? lastToken;
   String? lastRecommendationId;
 
+  String? _pendingBookingQuery;
+  bool? _awaitingTravelerCounts = false;
+
   String get base {
     if (kIsWeb) return 'http://localhost:3000/api';
     return 'http://10.0.2.2:3000/api';
@@ -75,6 +80,34 @@ class _HomePageState extends State<HomePage> {
 
   void _bot(String text) {
     setState(() => messages.insert(0, ChatMessage(text, fromUser: false)));
+  }
+
+  void _copyChatText(String text) {
+    final copiedText = text.trim();
+    if (copiedText.isEmpty) return;
+
+    Clipboard.setData(ClipboardData(text: copiedText));
+    final messenger = ScaffoldMessenger.of(context);
+    messenger.hideCurrentMaterialBanner();
+    messenger.showMaterialBanner(
+      MaterialBanner(
+        content: const Text('Message copied'),
+        leading: const Icon(Icons.check_circle, color: Colors.green),
+        backgroundColor: Colors.white,
+        actions: [
+          TextButton(
+            onPressed: () => messenger.hideCurrentMaterialBanner(),
+            child: const Text('OK'),
+          ),
+        ],
+      ),
+    );
+
+    Future.delayed(const Duration(seconds: 1), () {
+      if (mounted) {
+        messenger.hideCurrentMaterialBanner();
+      }
+    });
   }
 
   /// Handles the API response and converts technical errors into conversation
@@ -126,10 +159,28 @@ class _HomePageState extends State<HomePage> {
                       flight['totalFare'],
                   'name':
                       '${mainFlight['airline']} ${mainFlight['flightCode']}${mainFlight['flightNumber']}',
+                    'airline': mainFlight['airline'],
+                    'airlineCode': mainFlight['flightCode'],
+                    'flightNumber': mainFlight['flightNumber'],
+                    'departureCode': mainFlight['departure'],
+                    'arrivalCode': mainFlight['arrival'],
+                    'departureLocation': mainFlight['departurelocation'],
+                    'arrivalLocation': mainFlight['arrivallocation'],
+                    'fareFamily': mainFlight['fareFamily'],
                   'price': flight['showOurprice'] ?? flight['totalFare'] ?? '0',
+                    'baseFare': flight['baseFare'],
+                    'totalFare': flight['totalFare'],
+                    'taxes': flight['taxes'],
+                    'taxBreakUp': flight['taxBreakUp'],
                   'stops': flight['stops'] ?? 0,
                   'departure': mainFlight['departureTime'],
                   'arrival': mainFlight['arrivalTime'],
+                    'segments': flight['flights'],
+                    'ticketingTime': flight['ticketingTime'],
+                    'exchangeTime': flight['exchangeTime'],
+                    'voidTime': flight['voidTime'],
+                    'penaltyDetails': flight['penaltydetails'],
+                    'rawFlight': flight,
                   // Preserve destination info for bookings
                   'destinationId': flight['destinationId'],
                   'destinationCode': flight['destinationCode'],
@@ -275,6 +326,105 @@ class _HomePageState extends State<HomePage> {
   // the old method name from prior edits.
   String? _extractImageUrl(dynamic image) => _resolveImageUrl(image);
 
+  bool _isBookingIntentForTravelerPrompt(String message) {
+    // Booking lookup/cancel intents should go straight to backend without traveler prompts.
+    if (RegExp(r'\b(b_\d+)\b', caseSensitive: false).hasMatch(message)) {
+      return false;
+    }
+
+    if (RegExp(
+      r'\b(booking\s*(info|information|details|status)|show\s+booking|cancel\s+booking|reservation\s*(info|details|status))\b',
+      caseSensitive: false,
+    ).hasMatch(message)) {
+      return false;
+    }
+
+    return RegExp(
+      r'\b(book|flight|fly|hotel|stay|room|accommodation)\b',
+      caseSensitive: false,
+    ).hasMatch(message);
+  }
+
+  Map<String, int>? _extractTravelerCounts(String message) {
+    final adultsMatch = RegExp(
+      r'(\d+)\s*(adult|adults|passenger|passengers|guest|guests|person|people)',
+      caseSensitive: false,
+    ).firstMatch(message);
+    final childrenMatch = RegExp(
+      r'(\d+)\s*(child|children|kid|kids)',
+      caseSensitive: false,
+    ).firstMatch(message);
+
+    if (adultsMatch == null && childrenMatch == null) return null;
+
+    final adults = int.tryParse(adultsMatch?.group(1) ?? '') ?? 2;
+    final children = int.tryParse(childrenMatch?.group(1) ?? '') ?? 0;
+    return {'adults': adults, 'children': children};
+  }
+
+  String? _normalizeNaturalDate(String raw, {required int defaultYear}) {
+    final m = RegExp(
+      r'^\s*(\d{1,2})(?:st|nd|rd|th)?\s+([a-zA-Z]+)(?:\s+(\d{4}))?\s*$',
+    ).firstMatch(raw);
+    if (m == null) return null;
+
+    final day = int.tryParse(m.group(1) ?? '');
+    final monthToken = (m.group(2) ?? '').toLowerCase();
+    final year = int.tryParse(m.group(3) ?? '') ?? defaultYear;
+    if (day == null) return null;
+
+    const monthMap = {
+      'jan': 1,
+      'january': 1,
+      'feb': 2,
+      'february': 2,
+      'mar': 3,
+      'march': 3,
+      'apr': 4,
+      'april': 4,
+      'may': 5,
+      'jun': 6,
+      'june': 6,
+      'jul': 7,
+      'july': 7,
+      'aug': 8,
+      'august': 8,
+      'sep': 9,
+      'sept': 9,
+      'september': 9,
+      'oct': 10,
+      'october': 10,
+      'nov': 11,
+      'november': 11,
+      'dec': 12,
+      'december': 12,
+    };
+
+    final month = monthMap[monthToken];
+    if (month == null) return null;
+
+    final date = DateTime(year, month, day);
+    if (date.year != year || date.month != month || date.day != day) return null;
+
+    final y = date.year.toString().padLeft(4, '0');
+    final mm = date.month.toString().padLeft(2, '0');
+    final dd = date.day.toString().padLeft(2, '0');
+    return '$y-$mm-$dd';
+  }
+
+  String _normalizeNaturalDatesInMessage(String message) {
+    final nowYear = DateTime.now().year;
+    final naturalDateRegex = RegExp(
+      r'\b\d{1,2}(?:st|nd|rd|th)?\s+[a-zA-Z]+(?:\s+\d{4})?\b',
+      caseSensitive: false,
+    );
+
+    return message.replaceAllMapped(naturalDateRegex, (m) {
+      final normalized = _normalizeNaturalDate(m.group(0)!, defaultYear: nowYear);
+      return normalized ?? m.group(0)!;
+    });
+  }
+
   /// Check if string is a date in format YYYY-MM-DD
   bool _isDateFormat(String text) {
     final dateRegex = RegExp(r'^\d{4}-\d{2}-\d{2}$');
@@ -283,14 +433,15 @@ class _HomePageState extends State<HomePage> {
 
   /// Extract search parameters (city, check-in, check-out) from user message
   Map<String, String?> _extractSearchParameters(String message) {
-    final lowerMsg = message.toLowerCase();
+    final normalizedMessage = _normalizeNaturalDatesInMessage(message);
+    final lowerMsg = normalizedMessage.toLowerCase();
     String? city;
     String? checkIn;
     String? checkOut;
 
     // Look for date patterns (YYYY-MM-DD)
     final dateRegex = RegExp(r'\d{4}-\d{2}-\d{2}');
-    final dates = dateRegex.allMatches(message);
+    final dates = dateRegex.allMatches(normalizedMessage);
 
     if (dates.isNotEmpty) {
       checkIn = dates.first.group(0);
@@ -302,7 +453,7 @@ class _HomePageState extends State<HomePage> {
     // Try to extract city (common patterns)
     if (lowerMsg.contains('hotel in ')) {
       final idx = lowerMsg.indexOf('hotel in ') + 'hotel in '.length;
-      final afterIn = message.substring(idx);
+      final afterIn = normalizedMessage.substring(idx);
       final beforeFrom = afterIn.split(' from').first.trim();
       final beforeDate = beforeFrom.split(' on').first.trim();
       if (beforeDate.isNotEmpty) {
@@ -310,7 +461,7 @@ class _HomePageState extends State<HomePage> {
       }
     } else if (lowerMsg.contains(' in ')) {
       final idx = lowerMsg.lastIndexOf(' in ') + ' in '.length;
-      final afterIn = message.substring(idx);
+      final afterIn = normalizedMessage.substring(idx);
       final beforeFrom = afterIn.split(' from').first.trim();
       final beforeDate = beforeFrom.split(' on').first.trim();
       if (beforeDate.isNotEmpty && !_isDateFormat(beforeDate)) {
@@ -357,21 +508,56 @@ class _HomePageState extends State<HomePage> {
   }
 
   Future<void> _send(String text) async {
-    if (text.trim().isEmpty) return;
+    final trimmed = text.trim();
+    if (trimmed.isEmpty) return;
 
-    String userDisplayMessage = text;
-    
-    // Try to format incomplete hotel search
-    final formattedMessage = _tryFormatAsHotelSearch(text);
-    if (formattedMessage != null && formattedMessage != text) {
-      userDisplayMessage = formattedMessage;
+    final normalizedText = _normalizeNaturalDatesInMessage(trimmed);
+
+    if ((_awaitingTravelerCounts == true) && _pendingBookingQuery != null) {
+      final travelerCounts = _extractTravelerCounts(normalizedText);
+
+      setState(() => messages.insert(0, ChatMessage(trimmed, fromUser: true)));
+      inputCtrl.clear();
+
+      if (travelerCounts == null) {
+        _bot('Please share traveler counts like "2 adults and 1 child".');
+        return;
+      }
+
+      final combinedQuery =
+          '${_pendingBookingQuery!} for ${travelerCounts['adults']} adults and ${travelerCounts['children']} children';
+      _pendingBookingQuery = null;
+      _awaitingTravelerCounts = false;
+      await _sendToBackend(combinedQuery);
+      return;
+    }
+
+    final travelerCounts = _extractTravelerCounts(normalizedText);
+    if (_isBookingIntentForTravelerPrompt(normalizedText) && travelerCounts == null) {
+      _pendingBookingQuery = normalizedText;
+      _awaitingTravelerCounts = true;
+      setState(() => messages.insert(0, ChatMessage(trimmed, fromUser: true)));
+      inputCtrl.clear();
+      _bot('How many adults and children should I include for this booking?');
+      return;
     }
 
     setState(() {
-      messages.insert(0, ChatMessage(text, fromUser: true));
-      loading = true;
+      messages.insert(0, ChatMessage(trimmed, fromUser: true));
     });
     inputCtrl.clear();
+    await _sendToBackend(normalizedText);
+  }
+
+  Future<void> _sendToBackend(String messageText) async {
+    String userDisplayMessage = messageText;
+
+    final formattedMessage = _tryFormatAsHotelSearch(messageText);
+    if (formattedMessage != null && formattedMessage != messageText) {
+      userDisplayMessage = formattedMessage;
+    }
+
+    setState(() => loading = true);
 
     try {
       final r = await http.post(
@@ -399,6 +585,8 @@ class _HomePageState extends State<HomePage> {
   Future<void> _selectCard(dynamic it) async {
     final name = it['name'] ?? 'Selected item';
     final price = it['ourprice'] ?? it['price'] ?? 'N/A';
+    final isLikelyHotel = it is Map &&
+        (it['starRating'] != null || it['heroImage'] != null || it['mainamenity'] != null);
     
     // Ensure hotel object has destinationId for booking
     if (it is Map && it['destinationId'] == null && lastDestinationId != null) {
@@ -421,8 +609,16 @@ class _HomePageState extends State<HomePage> {
       () => messages.insert(0, ChatMessage('$name — \$$price', fromUser: true)),
     );
 
-    // Show booking confirmation dialog
-    _showBookingConfirmation(it);
+    // Hotel booking is completed through the payment dialog flow.
+    if (isLikelyHotel) {
+      _showBookingConfirmation(it);
+      return;
+    }
+
+    if (_isFlightCard(it)) {
+      await _handleFlightSelectionWithPayment(it);
+      return;
+    }
 
     // Still send to backend
     setState(() => loading = true);
@@ -450,6 +646,378 @@ class _HomePageState extends State<HomePage> {
     }
   }
 
+  String? _extractPaymentUrl(dynamic data) {
+    if (data == null) return null;
+    if (data is String && data.startsWith('http')) return data;
+    if (data is! Map) return null;
+
+    const candidates = [
+      'paymentUrl',
+      'paymentURL',
+      'payment_url',
+      'url',
+      'checkoutUrl',
+      'checkout_url',
+      'redirectUrl',
+      'redirect_url',
+      'link',
+      'paymentLink',
+      'payment_link',
+    ];
+
+    for (final key in candidates) {
+      final v = data[key];
+      if (v is String && v.startsWith('http')) return v;
+    }
+
+    final nestedCandidates = [
+      data['result'],
+      data['data'],
+      data['body'],
+      data['response'],
+      data['payload'],
+      data['result']?['response'],
+      data['result']?['data'],
+      data['result']?['body'],
+    ];
+    for (final nested in nestedCandidates) {
+      final nestedUrl = _extractPaymentUrl(nested);
+      if (nestedUrl != null) return nestedUrl;
+    }
+
+    return null;
+  }
+
+  num _extractFlightKey0(dynamic it) {
+    final candidates = <dynamic>[
+      it['key_0'],
+      it['key0'],
+      it['coin'],
+      it['showOurprice'],
+      it['totalFare'],
+      it['rawFlight']?['key_0'],
+      it['rawFlight']?['key0'],
+      it['rawFlight']?['coin'],
+      it['rawFlight']?['showOurprice'],
+      it['rawFlight']?['totalFare'],
+      it['rawFlight']?['result']?['key_0'],
+      it['rawFlight']?['result']?['coin'],
+      it['rawFlight']?['pricing']?['showOurprice'],
+      it['rawFlight']?['pricing']?['ourprice'],
+    ];
+
+    for (final value in candidates) {
+      final parsed = num.tryParse('${value ?? ''}');
+      if (parsed != null && parsed > 0) {
+        return parsed;
+      }
+    }
+
+    return 0;
+  }
+
+  Future<bool> _showFlightRevalidatedDialog(dynamic revalidate, dynamic selectedFlight) async {
+    final root = (revalidate is Map) ? revalidate : <String, dynamic>{};
+    final result = (root['result'] is Map) ? root['result'] as Map : <String, dynamic>{};
+    final pricing = (result['pricing'] is Map) ? result['pricing'] as Map : <String, dynamic>{};
+    final ptcInfo = (result['ptcInfo'] is List) ? result['ptcInfo'] as List : <dynamic>[];
+    final bookingRequired = (result['bookingRequired'] is List) ? result['bookingRequired'] as List : <dynamic>[];
+
+    final totalFare = pricing['totalFare'] ?? result['coin'] ?? 'N/A';
+    final taxes = pricing['taxes'] ?? 'N/A';
+    final ourPrice = pricing['showOurprice'] ?? pricing['ourprice'] ?? result['coin'] ?? 'N/A';
+
+    final firstPax = (ptcInfo.isNotEmpty && ptcInfo.first is Map)
+        ? ptcInfo.first as Map
+        : <String, dynamic>{};
+    final baggageInfo = (firstPax['baggageInfo'] is List) ? firstPax['baggageInfo'] as List : <dynamic>[];
+    final cabinBaggage = (firstPax['cabinBaggage'] is List) ? firstPax['cabinBaggage'] as List : <dynamic>[];
+    final penalties = (firstPax['penaltiesInfo'] is List) ? firstPax['penaltiesInfo'] as List : <dynamic>[];
+
+    final airline = (selectedFlight['airline'] ?? selectedFlight['name'] ?? 'Flight').toString();
+    final route = '${selectedFlight['departureCode'] ?? '---'} → ${selectedFlight['arrivalCode'] ?? '---'}';
+
+    final confirmed = await showDialog<bool>(
+      context: context,
+      barrierDismissible: false,
+      builder: (ctx) {
+        return Dialog(
+          insetPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 24),
+          child: ConstrainedBox(
+            constraints: const BoxConstraints(maxWidth: 760, maxHeight: 820),
+            child: Column(
+              children: [
+                Container(
+                  width: double.infinity,
+                  padding: const EdgeInsets.all(14),
+                  decoration: BoxDecoration(
+                    gradient: LinearGradient(
+                      colors: [Colors.indigo.shade700, Colors.indigo.shade500],
+                      begin: Alignment.topLeft,
+                      end: Alignment.bottomRight,
+                    ),
+                    borderRadius: const BorderRadius.only(
+                      topLeft: Radius.circular(12),
+                      topRight: Radius.circular(12),
+                    ),
+                  ),
+                  child: Row(
+                    children: [
+                      const Icon(Icons.verified, color: Colors.white),
+                      const SizedBox(width: 8),
+                      Expanded(
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            const Text(
+                              'Fare Revalidated',
+                              style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 16),
+                            ),
+                            const SizedBox(height: 2),
+                            Text(
+                              '$airline • $route',
+                              style: TextStyle(color: Colors.white.withOpacity(0.9), fontSize: 12),
+                            ),
+                          ],
+                        ),
+                      ),
+                      IconButton(
+                        onPressed: () => Navigator.of(ctx).pop(false),
+                        icon: const Icon(Icons.close, color: Colors.white),
+                      ),
+                    ],
+                  ),
+                ),
+                Expanded(
+                  child: SingleChildScrollView(
+                    padding: const EdgeInsets.all(16),
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Container(
+                          width: double.infinity,
+                          padding: const EdgeInsets.all(14),
+                          decoration: BoxDecoration(
+                            color: Colors.white,
+                            borderRadius: BorderRadius.circular(14),
+                            border: Border.all(color: Colors.grey.shade300),
+                          ),
+                          child: Column(
+                            children: [
+                              Row(
+                                children: [
+                                  Expanded(child: _flightInfoChip('Final Fare', '\$$ourPrice', backgroundColor: Colors.green.shade50, textColor: Colors.green.shade800)),
+                                  const SizedBox(width: 8),
+                                  Expanded(child: _flightInfoChip('Base/Total', '\$$totalFare', backgroundColor: Colors.grey.shade100)),
+                                  const SizedBox(width: 8),
+                                  Expanded(child: _flightInfoChip('Taxes', '\$$taxes', backgroundColor: Colors.orange.shade50, textColor: Colors.orange.shade800)),
+                                ],
+                              ),
+                              const SizedBox(height: 10),
+                              Wrap(
+                                spacing: 8,
+                                runSpacing: 8,
+                                children: [
+                                  _flightInfoChip('Fare Type', '${result['fairtype'] ?? 'N/A'}', backgroundColor: Colors.indigo.shade50, textColor: Colors.indigo.shade700),
+                                  _flightInfoChip('Refundable', '${result['isRefundable'] ?? 'N/A'}', backgroundColor: Colors.blue.shade50, textColor: Colors.blue.shade700),
+                                  _flightInfoChip('Price Changed', '${result['pricechange'] == true ? 'Yes' : 'No'}', backgroundColor: Colors.purple.shade50, textColor: Colors.purple.shade700),
+                                  _flightInfoChip('Itinerary Changed', '${result['iternarychange'] == true ? 'Yes' : 'No'}', backgroundColor: Colors.pink.shade50, textColor: Colors.pink.shade700),
+                                ],
+                              ),
+                            ],
+                          ),
+                        ),
+                        const SizedBox(height: 14),
+                        _sectionTitle('Baggage & cabin allowance'),
+                        const SizedBox(height: 8),
+                        Container(
+                          width: double.infinity,
+                          padding: const EdgeInsets.all(12),
+                          decoration: BoxDecoration(
+                            color: Colors.white,
+                            borderRadius: BorderRadius.circular(12),
+                            border: Border.all(color: Colors.grey.shade300),
+                          ),
+                          child: Column(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: [
+                              _detailRow('Checked baggage', baggageInfo.isEmpty ? 'N/A' : baggageInfo.join(' • ')),
+                              _detailRow('Cabin baggage', cabinBaggage.isEmpty ? 'N/A' : cabinBaggage.join(' • ')),
+                              _detailRow('Ticket type', '${result['ticketType'] ?? 'N/A'}'),
+                              _detailRow('Void time', '${result['voidtime'] ?? 'N/A'} mins'),
+                            ],
+                          ),
+                        ),
+                        const SizedBox(height: 14),
+                        _sectionTitle('Penalty details'),
+                        const SizedBox(height: 8),
+                        Container(
+                          width: double.infinity,
+                          padding: const EdgeInsets.all(12),
+                          decoration: BoxDecoration(
+                            color: Colors.white,
+                            borderRadius: BorderRadius.circular(12),
+                            border: Border.all(color: Colors.grey.shade300),
+                          ),
+                          child: penalties.isEmpty
+                              ? Text('No penalties data available', style: TextStyle(color: Colors.grey[700]))
+                              : Column(
+                                  children: penalties.map<Widget>((p) {
+                                    return Padding(
+                                      padding: const EdgeInsets.only(bottom: 8),
+                                      child: Container(
+                                        width: double.infinity,
+                                        padding: const EdgeInsets.all(10),
+                                        decoration: BoxDecoration(
+                                          color: Colors.grey.shade50,
+                                          borderRadius: BorderRadius.circular(10),
+                                        ),
+                                        child: Row(
+                                          children: [
+                                            Expanded(
+                                              child: Text(
+                                                '${p['penaltyType'] ?? 'Penalty'}',
+                                                style: const TextStyle(fontWeight: FontWeight.w600),
+                                              ),
+                                            ),
+                                            Text(
+                                              '${p['allowed'] == true ? 'Allowed' : 'Not allowed'} • ${p['amount'] ?? 'N/A'} ${p['currencyCode'] ?? ''}',
+                                              style: TextStyle(color: Colors.grey[800], fontSize: 12),
+                                            ),
+                                          ],
+                                        ),
+                                      ),
+                                    );
+                                  }).toList(),
+                                ),
+                        ),
+                        const SizedBox(height: 14),
+                        _sectionTitle('Traveler details required'),
+                        const SizedBox(height: 8),
+                        Wrap(
+                          spacing: 8,
+                          runSpacing: 8,
+                          children: bookingRequired
+                              .map<Widget>((f) => Chip(
+                                    label: Text(
+                                      f.toString().replaceAll('_', ' '),
+                                      style: const TextStyle(fontSize: 11),
+                                    ),
+                                    backgroundColor: Colors.indigo.shade50,
+                                    visualDensity: VisualDensity.compact,
+                                  ))
+                              .toList(),
+                        ),
+                      ],
+                    ),
+                  ),
+                ),
+                Container(
+                  padding: const EdgeInsets.fromLTRB(16, 10, 16, 16),
+                  child: Row(
+                    children: [
+                      Expanded(
+                        child: OutlinedButton(
+                          onPressed: () => Navigator.of(ctx).pop(false),
+                          child: const Text('Cancel'),
+                        ),
+                      ),
+                      const SizedBox(width: 10),
+                      Expanded(
+                        child: ElevatedButton(
+                          onPressed: () => Navigator.of(ctx).pop(true),
+                          child: const Text('Continue to Payment'),
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+              ],
+            ),
+          ),
+        );
+      },
+    );
+
+    return confirmed == true;
+  }
+
+  Future<void> _handleFlightSelectionWithPayment(dynamic it) async {
+    final fareSourceCode = (it['fareSourceCode'] ?? it['id'] ?? '').toString();
+    final key0 = _extractFlightKey0(it);
+
+    if (fareSourceCode.isEmpty || key0 <= 0) {
+      _bot('Unable to process this flight selection. Please select another option.');
+      return;
+    }
+
+    setState(() => loading = true);
+    try {
+      final revalidate = await bookingService.revalidateFlight(
+        fareSourceCode: fareSourceCode,
+        key0: key0,
+      );
+
+      if (revalidate is! Map || revalidate['success'] != true) {
+        _bot('Flight revalidation failed. Please try a different flight option.');
+        return;
+      }
+
+      setState(() => loading = false);
+      final proceedToPayment = await _showFlightRevalidatedDialog(revalidate, it);
+      if (!proceedToPayment) {
+        _bot('Flight selection cancelled. You can choose another option anytime.');
+        return;
+      }
+      setState(() => loading = true);
+
+      final payment = await bookingService.getFlightPaymentUrl(
+        fareSourceCode: fareSourceCode,
+        key0: key0,
+        revalidateResult: revalidate['result'] ?? revalidate,
+        selectedFlight: it['rawFlight'] ?? it,
+        origin: (it['departureCode'] ?? '').toString(),
+        destination: (it['arrivalCode'] ?? '').toString(),
+        departureDate: _formatDateTime(it['departure']?.toString()).split(' ').first,
+      );
+
+      final paymentUrl = _extractPaymentUrl(payment);
+      if (paymentUrl == null) {
+        _bot('Flight revalidated, but payment URL is unavailable right now. Please try again in a moment.');
+        return;
+      }
+
+      final url = Uri.parse(paymentUrl);
+      if (!await canLaunchUrl(url)) {
+        _bot('Could not open payment URL for this flight.');
+        return;
+      }
+
+      await launchUrl(
+        url,
+        mode: kIsWeb ? LaunchMode.platformDefault : LaunchMode.externalApplication,
+      );
+
+      final bookingId = await bookingService.createBookingRecord(
+        name: 'Flight Traveler',
+        type: 'flight',
+        itemId: fareSourceCode,
+        details:
+            'Route: ${it['departureCode'] ?? ''} -> ${it['arrivalCode'] ?? ''}, Date: ${it['departure'] ?? ''}',
+      );
+
+      if (bookingId != null && bookingId.isNotEmpty) {
+        _bot('Flight payment initiated. Booking confirmed. Booking ID: $bookingId');
+      } else {
+        _bot('Flight payment initiated successfully.');
+      }
+    } catch (e) {
+      _bot('Unable to complete flight payment flow right now. Please try again.');
+    } finally {
+      setState(() => loading = false);
+    }
+  }
+
   /// Show booking confirmation dialog with room selection and payment
   void _showBookingConfirmation(dynamic hotel) {
     showGeneralDialog(
@@ -461,8 +1029,11 @@ class _HomePageState extends State<HomePage> {
         return BookingConfirmationDialog(
           hotel: hotel,
           bookingService: bookingService,
-          onClose: () {
-            // Handle close if needed
+          onCancel: () {
+            _bot('Would you like to book a flight or a hotel?');
+          },
+          onBookingConfirmed: (bookingId) {
+            _bot('Booking confirmed. Booking ID: $bookingId');
           },
         );
       },
@@ -548,6 +1119,8 @@ class _HomePageState extends State<HomePage> {
   }
 
   Widget _buildTextMessage(ChatMessage m) {
+    final messageText = m.text ?? '';
+
     return Align(
       alignment: m.fromUser ? Alignment.centerRight : Alignment.centerLeft,
       child: Container(
@@ -576,12 +1149,34 @@ class _HomePageState extends State<HomePage> {
             )
           ],
         ),
-        child: Text(
-          m.text ?? '',
-          style: TextStyle(
-            fontSize: 15,
-            color: m.fromUser ? Colors.white : Colors.black87,
-          ),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            if (messageText.isNotEmpty)
+              Align(
+                alignment: Alignment.centerRight,
+                child: IconButton(
+                  visualDensity: VisualDensity.compact,
+                  padding: EdgeInsets.zero,
+                  constraints: const BoxConstraints(minWidth: 32, minHeight: 32),
+                  splashRadius: 18,
+                  onPressed: () => _copyChatText(messageText),
+                  icon: Icon(
+                    Icons.copy,
+                    size: 18,
+                    color: m.fromUser ? Colors.white70 : Colors.grey[600],
+                  ),
+                ),
+              ),
+            SelectableText(
+              messageText,
+              style: TextStyle(
+                fontSize: 15,
+                color: m.fromUser ? Colors.white : Colors.black87,
+              ),
+            ),
+          ],
         ),
       ),
     );
@@ -609,148 +1204,871 @@ class _HomePageState extends State<HomePage> {
                   child: Text(m.text!,
                       style: const TextStyle(fontWeight: FontWeight.w600))),
             ...m.cards!
-                .map((it) => Card(
-                      elevation: 2,
-                      margin: const EdgeInsets.symmetric(vertical: 6),
-                      shape: RoundedRectangleBorder(
-                          borderRadius: BorderRadius.circular(10)),
-                      child: Padding(
-                        padding: const EdgeInsets.all(12),
+                .map((it) => _isFlightCard(it)
+                    ? _buildFlightOptionCard(it)
+                    : _buildHotelOptionCard(it))
+                .toList(),
+          ],
+        ),
+      ),
+    );
+  }
+
+  bool _isFlightCard(dynamic it) {
+    return it is Map &&
+        (it['fareSourceCode'] != null || it['segments'] != null || it['departureCode'] != null);
+  }
+
+  String? _flightLogoUrl(dynamic it) {
+    if (it is! Map) return null;
+    final airlineCode = (it['airlineCode'] ??
+            (it['segments'] is List && (it['segments'] as List).isNotEmpty
+                ? it['segments'][0]['flightCode']
+                : null))
+        ?.toString()
+        .toUpperCase();
+
+    if (airlineCode == null || airlineCode.length < 2) return null;
+    return 'https://images.kiwi.com/airlines/64/$airlineCode.png';
+  }
+
+  String? _flightLogoProxyUrl(dynamic it) {
+    final logoUrl = _flightLogoUrl(it);
+    if (logoUrl == null) return null;
+    return _proxyImageUrl(logoUrl);
+  }
+
+  String _formatTimeOnly(String? iso) {
+    if (iso == null || iso.isEmpty) return 'N/A';
+    final dt = DateTime.tryParse(iso);
+    if (dt == null) return iso;
+    final hh = dt.hour.toString().padLeft(2, '0');
+    final mm = dt.minute.toString().padLeft(2, '0');
+    return '$hh:$mm';
+  }
+
+  String _formatDuration(String? startIso, String? endIso) {
+    final start = DateTime.tryParse(startIso ?? '');
+    final end = DateTime.tryParse(endIso ?? '');
+    if (start == null || end == null || end.isBefore(start)) return 'N/A';
+
+    final diff = end.difference(start);
+    final hours = diff.inHours;
+    final mins = diff.inMinutes % 60;
+    if (hours <= 0) return '${mins}m';
+    if (mins == 0) return '${hours}h';
+    return '${hours}h ${mins}m';
+  }
+
+  String _formatDateTime(String? iso) {
+    if (iso == null || iso.isEmpty) return 'N/A';
+    final dt = DateTime.tryParse(iso);
+    if (dt == null) return iso;
+    final hh = dt.hour.toString().padLeft(2, '0');
+    final mm = dt.minute.toString().padLeft(2, '0');
+    return '${dt.year}-${dt.month.toString().padLeft(2, '0')}-${dt.day.toString().padLeft(2, '0')} $hh:$mm';
+  }
+
+  Widget _buildFlightOptionCard(dynamic it) {
+    final logoUrl = _flightLogoProxyUrl(it);
+    final segments = (it['segments'] is List) ? it['segments'] as List : [];
+
+    final firstSeg =
+        (segments.isNotEmpty && segments.first is Map) ? segments.first as Map : null;
+    final lastSeg =
+        (segments.isNotEmpty && segments.last is Map) ? segments.last as Map : null;
+
+    final depCode = (it['departureCode'] ?? firstSeg?['departure'] ?? '---').toString();
+    final arrCode = (it['arrivalCode'] ?? lastSeg?['arrival'] ?? '---').toString();
+    final depIso = (it['departure'] ?? firstSeg?['departureTime'])?.toString();
+    final arrIso = (it['arrival'] ?? lastSeg?['arrivalTime'])?.toString();
+    final depTime = _formatTimeOnly(depIso);
+    final arrTime = _formatTimeOnly(arrIso);
+    final depDate = _formatDateTime(depIso).split(' ').first;
+    final arrDate = _formatDateTime(arrIso).split(' ').first;
+    final duration = _formatDuration(depIso, arrIso);
+    final stopCount = int.tryParse('${it['stops'] ?? 0}') ?? 0;
+    final stopLabel = stopCount == 0 ? 'Non-stop' : '$stopCount stop${stopCount > 1 ? 's' : ''}';
+    final airlineName = (it['airline'] ?? firstSeg?['airline'] ?? 'Flight').toString();
+    final flightCode = '${it['airlineCode'] ?? firstSeg?['flightCode'] ?? ''}${it['flightNumber'] ?? firstSeg?['flightNumber'] ?? ''}'.trim();
+    final fareFamily = (it['fareFamily'] ?? firstSeg?['fareFamily'] ?? 'Standard').toString();
+
+    return Card(
+      elevation: 3,
+      margin: const EdgeInsets.symmetric(vertical: 6),
+      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
+      child: Padding(
+        padding: const EdgeInsets.all(14),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Row(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                if (logoUrl != null)
+                  Image.network(
+                    logoUrl,
+                    width: 32,
+                    height: 32,
+                    errorBuilder: (_, __, ___) => const Icon(Icons.flight, size: 24),
+                  )
+                else
+                  const Icon(Icons.flight, size: 24),
+                const SizedBox(width: 10),
+                Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text(
+                        airlineName,
+                        style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 16),
+                      ),
+                      const SizedBox(height: 2),
+                      Text(
+                        flightCode.isEmpty ? 'Flight option' : flightCode,
+                        style: TextStyle(color: Colors.grey[700], fontSize: 12),
+                      ),
+                    ],
+                  ),
+                ),
+                Column(
+                  crossAxisAlignment: CrossAxisAlignment.end,
+                  children: [
+                    Text(
+                      '\$${it['price'] ?? it['showOurprice'] ?? it['totalFare'] ?? 'N/A'}',
+                      style: const TextStyle(
+                        fontSize: 20,
+                        fontWeight: FontWeight.bold,
+                        color: Colors.green,
+                      ),
+                    ),
+                    Text(
+                      'per traveler',
+                      style: TextStyle(color: Colors.grey[600], fontSize: 11),
+                    ),
+                  ],
+                ),
+              ],
+            ),
+            const SizedBox(height: 12),
+            Container(
+              width: double.infinity,
+              padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+              decoration: BoxDecoration(
+                color: const Color(0xFFF7F9FD),
+                borderRadius: BorderRadius.circular(12),
+                border: Border.all(color: Colors.grey.shade300),
+              ),
+              child: Row(
+                children: [
+                  Expanded(
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Text(depTime,
+                            style: const TextStyle(fontSize: 20, fontWeight: FontWeight.bold)),
+                        const SizedBox(height: 2),
+                        Text(depCode,
+                            style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w700)),
+                        const SizedBox(height: 2),
+                        Text(depDate, style: TextStyle(fontSize: 11, color: Colors.grey[700])),
+                      ],
+                    ),
+                  ),
+                  SizedBox(
+                    width: 110,
+                    child: Column(
+                      children: [
+                        Text(duration,
+                            style: TextStyle(
+                                color: Colors.grey[800],
+                                fontSize: 12,
+                                fontWeight: FontWeight.w600)),
+                        const SizedBox(height: 4),
+                        Row(
+                          children: [
+                            Expanded(
+                              child: Container(
+                                height: 1.8,
+                                color: Colors.indigo.shade100,
+                              ),
+                            ),
+                            Padding(
+                              padding: const EdgeInsets.symmetric(horizontal: 4),
+                              child: Icon(Icons.flight, size: 16, color: Colors.indigo.shade400),
+                            ),
+                            Expanded(
+                              child: Container(
+                                height: 1.8,
+                                color: Colors.indigo.shade100,
+                              ),
+                            ),
+                          ],
+                        ),
+                        const SizedBox(height: 4),
+                        Text(stopLabel,
+                            style: TextStyle(color: Colors.grey[700], fontSize: 11)),
+                      ],
+                    ),
+                  ),
+                  Expanded(
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.end,
+                      children: [
+                        Text(arrTime,
+                            style: const TextStyle(fontSize: 20, fontWeight: FontWeight.bold)),
+                        const SizedBox(height: 2),
+                        Text(arrCode,
+                            style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w700)),
+                        const SizedBox(height: 2),
+                        Text(arrDate, style: TextStyle(fontSize: 11, color: Colors.grey[700])),
+                      ],
+                    ),
+                  ),
+                ],
+              ),
+            ),
+            const SizedBox(height: 10),
+            Wrap(
+              spacing: 8,
+              runSpacing: 8,
+              children: [
+                _flightInfoChip('Fare', fareFamily, backgroundColor: Colors.indigo.shade50, textColor: Colors.indigo.shade700),
+                _flightInfoChip('Ticketing', '${it['ticketingTime'] ?? 'N/A'} mins', backgroundColor: Colors.orange.shade50, textColor: Colors.orange.shade800),
+                _flightInfoChip('Stops', '$stopCount', backgroundColor: Colors.grey.shade100),
+              ],
+            ),
+            if (it['baseFare'] != null || it['taxes'] != null || it['totalFare'] != null)
+              Padding(
+                padding: const EdgeInsets.only(top: 10),
+                child: Container(
+                  width: double.infinity,
+                  padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
+                  decoration: BoxDecoration(
+                    color: Colors.grey.shade50,
+                    borderRadius: BorderRadius.circular(10),
+                  ),
+                  child: Text(
+                    'Base: ${it['baseFare'] ?? 'N/A'}   Taxes: ${it['taxes'] ?? 'N/A'}   Total: ${it['totalFare'] ?? 'N/A'}',
+                    style: TextStyle(color: Colors.grey[700], fontSize: 12, fontWeight: FontWeight.w600),
+                  ),
+                ),
+              ),
+            const SizedBox(height: 12),
+            Row(
+              mainAxisAlignment: MainAxisAlignment.end,
+              children: [
+                TextButton(
+                  onPressed: () => _showFlightDetails(it),
+                  child: const Text('View Details'),
+                ),
+                const SizedBox(width: 8),
+                ElevatedButton(
+                  onPressed: () => _selectCard(it),
+                  child: const Text('Select Flight'),
+                ),
+              ],
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget _detailRow(String label, dynamic value) {
+    final txt = (value == null || value.toString().isEmpty) ? 'N/A' : value.toString();
+    return Padding(
+      padding: const EdgeInsets.symmetric(vertical: 3),
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          SizedBox(
+            width: 130,
+            child: Text(
+              label,
+              style: const TextStyle(fontWeight: FontWeight.w600, fontSize: 12),
+            ),
+          ),
+          Expanded(
+            child: SelectableText(
+              txt,
+              style: TextStyle(color: Colors.grey[800], fontSize: 12),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _flightInfoChip(String label, String value, {Color? backgroundColor, Color? textColor}) {
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
+      decoration: BoxDecoration(
+        color: backgroundColor ?? Colors.white,
+        borderRadius: BorderRadius.circular(14),
+        border: Border.all(color: Colors.grey.shade300),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Text(
+            label,
+            style: TextStyle(fontSize: 11, color: Colors.grey[600]),
+          ),
+          const SizedBox(height: 2),
+          Text(
+            value,
+            style: TextStyle(
+              fontSize: 12,
+              fontWeight: FontWeight.w700,
+              color: textColor ?? Colors.black87,
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _sectionTitle(String title, {String? subtitle}) {
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Text(
+          title,
+          style: const TextStyle(
+            fontSize: 15,
+            fontWeight: FontWeight.bold,
+          ),
+        ),
+        if (subtitle != null) ...[
+          const SizedBox(height: 2),
+          Text(
+            subtitle,
+            style: TextStyle(fontSize: 12, color: Colors.grey[600]),
+          ),
+        ],
+      ],
+    );
+  }
+
+  Widget _timelineMarker({required bool isLast}) {
+    return SizedBox(
+      width: 22,
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Container(
+            width: 10,
+            height: 10,
+            decoration: const BoxDecoration(
+              color: Colors.indigo,
+              shape: BoxShape.circle,
+            ),
+          ),
+          if (!isLast)
+            Container(
+              width: 2,
+              height: 34,
+              margin: const EdgeInsets.only(top: 2),
+              color: Colors.indigo.shade100,
+            ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildSegmentTile(Map<String, dynamic> seg, {required bool isLast}) {
+    return Row(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        _timelineMarker(isLast: isLast),
+        const SizedBox(width: 8),
+        Expanded(
+          child: Container(
+            margin: EdgeInsets.only(bottom: isLast ? 0 : 10),
+            padding: const EdgeInsets.all(12),
+            decoration: BoxDecoration(
+              color: Colors.white,
+              borderRadius: BorderRadius.circular(14),
+              border: Border.all(color: Colors.grey.shade300),
+            ),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Row(
+                  children: [
+                    Expanded(
+                      child: Text(
+                        '${seg['airline'] ?? 'Airline'} ${seg['flightCode'] ?? ''}${seg['flightNumber'] ?? ''}',
+                        style: const TextStyle(
+                          fontWeight: FontWeight.bold,
+                          fontSize: 13,
+                        ),
+                      ),
+                    ),
+                    if ((seg['remainingSeats'] ?? '').toString() != 'N/A')
+                      Container(
+                        padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                        decoration: BoxDecoration(
+                          color: Colors.green.shade50,
+                          borderRadius: BorderRadius.circular(999),
+                        ),
+                        child: Text(
+                          '${seg['remainingSeats'] ?? 'N/A'} seats left',
+                          style: TextStyle(
+                            color: Colors.green.shade800,
+                            fontSize: 11,
+                            fontWeight: FontWeight.w600,
+                          ),
+                        ),
+                      ),
+                  ],
+                ),
+                const SizedBox(height: 8),
+                Row(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Expanded(
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Text(
+                            seg['departurelocation']?.toString() ?? seg['departure']?.toString() ?? 'Departure',
+                            style: const TextStyle(fontWeight: FontWeight.w600),
+                          ),
+                          const SizedBox(height: 2),
+                          Text(
+                            '${seg['departureairport'] ?? seg['departairport'] ?? ''}\n${_formatDateTime(seg['departureTime']?.toString())}',
+                            style: TextStyle(fontSize: 12, color: Colors.grey[700]),
+                          ),
+                        ],
+                      ),
+                    ),
+                    Container(
+                      margin: const EdgeInsets.symmetric(horizontal: 8, vertical: 10),
+                      child: Column(
+                        children: [
+                          Icon(Icons.flight_takeoff, size: 18, color: Colors.indigo.shade300),
+                          const SizedBox(height: 4),
+                          Container(
+                            width: 64,
+                            height: 2,
+                            color: Colors.indigo.shade100,
+                          ),
+                        ],
+                      ),
+                    ),
+                    Expanded(
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.end,
+                        children: [
+                          Text(
+                            seg['arrivallocation']?.toString() ?? seg['arrival']?.toString() ?? 'Arrival',
+                            style: const TextStyle(fontWeight: FontWeight.w600),
+                            textAlign: TextAlign.right,
+                          ),
+                          const SizedBox(height: 2),
+                          Text(
+                            '${seg['arrivalairport'] ?? seg['arrivalairport'] ?? ''}\n${_formatDateTime(seg['arrivalTime']?.toString())}',
+                            style: TextStyle(fontSize: 12, color: Colors.grey[700]),
+                            textAlign: TextAlign.right,
+                          ),
+                        ],
+                      ),
+                    ),
+                  ],
+                ),
+                const SizedBox(height: 8),
+                Wrap(
+                  spacing: 8,
+                  runSpacing: 8,
+                  children: [
+                    _flightInfoChip('Cabin', seg['cabin']?.toString() ?? 'N/A', backgroundColor: Colors.grey.shade50),
+                    _flightInfoChip('Duration', '${seg['triptime'] ?? 'N/A'} mins', backgroundColor: Colors.grey.shade50),
+                    _flightInfoChip('Leg', '${seg['legindicator'] ?? 'N/A'}', backgroundColor: Colors.grey.shade50),
+                  ],
+                ),
+              ],
+            ),
+          ),
+        ),
+      ],
+    );
+  }
+
+  void _showFlightDetails(dynamic it) {
+    final logoUrl = _flightLogoProxyUrl(it);
+    final segments = (it['segments'] is List) ? it['segments'] as List : <dynamic>[];
+    final taxBreakUp = (it['taxBreakUp'] is List) ? it['taxBreakUp'] as List : <dynamic>[];
+    final penalties = (it['penaltyDetails'] is List) ? it['penaltyDetails'] as List : <dynamic>[];
+    final rawFlight = it['rawFlight'] ?? it;
+
+    showDialog(
+      context: context,
+      builder: (ctx) {
+        return Dialog(
+          insetPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 24),
+          child: ConstrainedBox(
+            constraints: const BoxConstraints(maxWidth: 820, maxHeight: 860),
+            child: Column(
+              children: [
+                Container(
+                  width: double.infinity,
+                  padding: const EdgeInsets.all(16),
+                  decoration: BoxDecoration(
+                    gradient: LinearGradient(
+                      colors: [Colors.indigo.shade700, Colors.indigo.shade500],
+                      begin: Alignment.topLeft,
+                      end: Alignment.bottomRight,
+                    ),
+                    borderRadius: const BorderRadius.only(
+                      topLeft: Radius.circular(12),
+                      topRight: Radius.circular(12),
+                    ),
+                  ),
+                  child: Row(
+                    crossAxisAlignment: CrossAxisAlignment.center,
+                    children: [
+                      Container(
+                        width: 42,
+                        height: 42,
+                        decoration: BoxDecoration(
+                          color: Colors.white.withOpacity(0.16),
+                          borderRadius: BorderRadius.circular(12),
+                        ),
+                        child: Center(
+                          child: logoUrl != null
+                              ? Image.network(
+                                  logoUrl,
+                                  width: 26,
+                                  height: 26,
+                                  errorBuilder: (_, __, ___) => const Icon(Icons.flight, color: Colors.white),
+                                )
+                              : const Icon(Icons.flight, color: Colors.white),
+                        ),
+                      ),
+                      const SizedBox(width: 12),
+                      Expanded(
                         child: Column(
                           crossAxisAlignment: CrossAxisAlignment.start,
                           children: [
-                            // Hotel image
-                            if (it['heroImage'] != null &&
-                                it['heroImage'].toString().isNotEmpty)
-                              ClipRRect(
-                                borderRadius: BorderRadius.circular(8),
-                                child: Image.network(
-                                  _proxyImageUrl(it['heroImage'].toString()),
-                                  height: 150,
-                                  width: double.infinity,
-                                  fit: BoxFit.cover,
-                                  errorBuilder: (context, error, stackTrace) =>
-                                      Container(
-                                    height: 150,
-                                    color: Colors.grey[300],
-                                    child: const Icon(Icons.hotel,
-                                        size: 50, color: Colors.grey),
-                                  ),
-                                ),
+                            Text(
+                              it['airline'] ?? 'Flight Details',
+                              style: const TextStyle(
+                                color: Colors.white,
+                                fontSize: 18,
+                                fontWeight: FontWeight.bold,
                               ),
-                            const SizedBox(height: 12),
-                            // Hotel name and rating
-                            Row(
-                              children: [
-                                Expanded(
-                                  child: Text(it['name'] ?? 'Hotel Option',
-                                      style: const TextStyle(
-                                          fontWeight: FontWeight.bold,
-                                          fontSize: 16)),
-                                ),
-                                if (it['starRating'] != null &&
-                                    it['starRating'] > 0)
-                                  Row(
-                                    children: List.generate(
-                                      it['starRating'],
-                                      (index) => const Icon(Icons.star,
-                                          color: Colors.amber, size: 16),
-                                    ),
-                                  ),
-                              ],
-                            ),
-                            const SizedBox(height: 8),
-                            // Price and savings
-                            Row(
-                              children: [
-                                Text(
-                                  '\$${it['ourprice'] ?? 'N/A'}',
-                                  style: const TextStyle(
-                                      fontSize: 18,
-                                      fontWeight: FontWeight.bold,
-                                      color: Colors.green),
-                                ),
-                                if (it['saving'] != null && it['saving'] > 0)
-                                  Padding(
-                                    padding: const EdgeInsets.only(left: 8),
-                                    child: Text(
-                                      'Save \$${it['saving']}',
-                                      style: const TextStyle(
-                                          color: Colors.red,
-                                          fontWeight: FontWeight.w500),
-                                    ),
-                                  ),
-                              ],
                             ),
                             const SizedBox(height: 4),
-                            // Distance and location
-                            if (it['distance'] != null)
-                              Text(
-                                '${it['distance'].toStringAsFixed(1)} km from center',
-                                style: TextStyle(
-                                    color: Colors.grey[600], fontSize: 12),
-                              ),
-                            if (it['contact'] != null &&
-                                it['contact']['address'] != null)
-                              Text(
-                                '${it['contact']['address']['city']?['name'] ?? ''}, ${it['contact']['address']['country']?['name'] ?? ''}',
-                                style: TextStyle(
-                                    color: Colors.grey[600], fontSize: 12),
-                              ),
-                            const SizedBox(height: 8),
-                            // Reviews
-                            if (it['reviews'] != null)
-                              Row(
-                                children: [
-                                  const Icon(Icons.star,
-                                      color: Colors.amber, size: 14),
-                                  Text(
-                                    '${it['reviews']['rating'] ?? 'N/A'} (${it['reviews']['count'] ?? 0} reviews)',
-                                    style: TextStyle(
-                                        color: Colors.grey[700], fontSize: 12),
-                                  ),
-                                ],
-                              ),
-                            const SizedBox(height: 8),
-                            // Main amenities
-                            if (it['mainamenity'] != null &&
-                                it['mainamenity'] is List)
-                              Wrap(
-                                spacing: 4,
-                                runSpacing: 4,
-                                children: (it['mainamenity'] as List)
-                                    .map<Widget>((amenity) => Chip(
-                                          label: Text(amenity,
-                                              style: const TextStyle(
-                                                  fontSize: 10)),
-                                          backgroundColor: Colors.blue.shade50,
-                                          padding: EdgeInsets.zero,
-                                          materialTapTargetSize:
-                                              MaterialTapTargetSize.shrinkWrap,
-                                        ))
-                                    .toList(),
-                              ),
-                            const SizedBox(height: 8),
-                            // Action buttons
-                            Row(
-                              mainAxisAlignment: MainAxisAlignment.end,
-                              children: [
-                                TextButton(
-                                  onPressed: () => _showHotelDetails(it),
-                                  child: const Text('View Details'),
-                                ),
-                                const SizedBox(width: 8),
-                                ElevatedButton(
-                                  onPressed: () => _selectCard(it),
-                                  child: const Text('Select'),
-                                ),
-                              ],
+                            Text(
+                              '${it['departureCode'] ?? ''} → ${it['arrivalCode'] ?? ''} • ${it['fareFamily'] ?? 'Fare not specified'}',
+                              style: TextStyle(color: Colors.white.withOpacity(0.9), fontSize: 12),
                             ),
                           ],
                         ),
                       ),
-                    ))
-                .toList(),
+                      IconButton(
+                        onPressed: () => Navigator.of(ctx).pop(),
+                        icon: const Icon(Icons.close, color: Colors.white),
+                      ),
+                    ],
+                  ),
+                ),
+                Expanded(
+                  child: Container(
+                    color: const Color(0xFFF6F8FB),
+                    child: SingleChildScrollView(
+                      padding: const EdgeInsets.all(16),
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Container(
+                            padding: const EdgeInsets.all(14),
+                            decoration: BoxDecoration(
+                              color: Colors.white,
+                              borderRadius: BorderRadius.circular(16),
+                              border: Border.all(color: Colors.grey.shade300),
+                            ),
+                            child: Column(
+                              crossAxisAlignment: CrossAxisAlignment.start,
+                              children: [
+                                Row(
+                                  children: [
+                                    Expanded(
+                                      child: Column(
+                                        crossAxisAlignment: CrossAxisAlignment.start,
+                                        children: [
+                                          Text(
+                                            it['name'] ?? 'Flight Option',
+                                            style: const TextStyle(fontSize: 16, fontWeight: FontWeight.bold),
+                                          ),
+                                          const SizedBox(height: 4),
+                                          // Text(
+                                          //   'Ref: ${it['fareSourceCode'] ?? 'N/A'}',
+                                          //   style: TextStyle(fontSize: 11, color: Colors.grey[600]),
+                                          // ),
+                                        ],
+                                      ),
+                                    ),
+                                    Column(
+                                      crossAxisAlignment: CrossAxisAlignment.end,
+                                      children: [
+                                        Text(
+                                          '\$${it['price'] ?? it['showOurprice'] ?? it['totalFare'] ?? 'N/A'}',
+                                          style: const TextStyle(fontSize: 22, fontWeight: FontWeight.bold, color: Colors.green),
+                                        ),
+                                        Text(
+                                          'per traveler',
+                                          style: TextStyle(fontSize: 11, color: Colors.grey[600]),
+                                        ),
+                                      ],
+                                    ),
+                                  ],
+                                ),
+                                const SizedBox(height: 14),
+                                Wrap(
+                                  spacing: 10,
+                                  runSpacing: 10,
+                                  children: [
+                                    _flightInfoChip('Stops', '${it['stops'] ?? 0}', backgroundColor: Colors.indigo.shade50, textColor: Colors.indigo.shade700),
+                                    _flightInfoChip('Ticketing', '${it['ticketingTime'] ?? 'N/A'} mins', backgroundColor: Colors.orange.shade50, textColor: Colors.orange.shade800),
+                                    _flightInfoChip('Exchange', '${it['exchangeTime'] ?? 'N/A'}', backgroundColor: Colors.blue.shade50, textColor: Colors.blue.shade800),
+                                    _flightInfoChip('Void', '${it['voidTime'] ?? 'N/A'}', backgroundColor: Colors.purple.shade50, textColor: Colors.purple.shade800),
+                                  ],
+                                ),
+                              ],
+                            ),
+                          ),
+                          const SizedBox(height: 16),
+                          Container(
+                            padding: const EdgeInsets.all(16),
+                            decoration: BoxDecoration(
+                              color: Colors.white,
+                              borderRadius: BorderRadius.circular(16),
+                              border: Border.all(color: Colors.grey.shade300),
+                            ),
+                            child: Column(
+                              crossAxisAlignment: CrossAxisAlignment.start,
+                              children: [
+                                _sectionTitle('Flight itinerary', subtitle: 'Detailed segment-by-segment journey view'),
+                                const SizedBox(height: 14),
+                                if (segments.isEmpty)
+                                  Text('No segment details available', style: TextStyle(color: Colors.grey[700]))
+                                else
+                                  ...segments.asMap().entries.map<Widget>((entry) {
+                                    final index = entry.key;
+                                    final seg = Map<String, dynamic>.from(entry.value as Map);
+                                    return _buildSegmentTile(seg, isLast: index == segments.length - 1);
+                                  }).toList(),
+                              ],
+                            ),
+                          ),
+                          const SizedBox(height: 16),
+                          Container(
+                            padding: const EdgeInsets.all(16),
+                            decoration: BoxDecoration(
+                              color: Colors.white,
+                              borderRadius: BorderRadius.circular(16),
+                              border: Border.all(color: Colors.grey.shade300),
+                            ),
+                            child: Column(
+                              crossAxisAlignment: CrossAxisAlignment.start,
+                              children: [
+                                _sectionTitle('Fare & pricing'),
+                                const SizedBox(height: 10),
+                                _detailRow('Departure airport', it['departureLocation'] ?? it['departureCode']),
+                                _detailRow('Arrival airport', it['arrivalLocation'] ?? it['arrivalCode']),
+                                _detailRow('Displayed price', it['price']),
+                                _detailRow('Base fare', it['baseFare']),
+                                _detailRow('Taxes', it['taxes']),
+                                _detailRow('Total fare', it['totalFare']),
+                                const SizedBox(height: 8),
+                                if (taxBreakUp.isNotEmpty) ...[
+                                  const Divider(),
+                                  const SizedBox(height: 4),
+                                  _sectionTitle('Tax breakup'),
+                                  const SizedBox(height: 8),
+                                  Wrap(
+                                    spacing: 8,
+                                    runSpacing: 8,
+                                    children: taxBreakUp.map<Widget>((tax) {
+                                      return _flightInfoChip(
+                                        tax['taxCode']?.toString() ?? 'Tax',
+                                        tax['amount']?.toString() ?? 'N/A',
+                                        backgroundColor: Colors.grey.shade50,
+                                      );
+                                    }).toList(),
+                                  ),
+                                ],
+                              ],
+                            ),
+                          ),
+                          const SizedBox(height: 16),
+                          Container(
+                            padding: const EdgeInsets.all(16),
+                            decoration: BoxDecoration(
+                              color: Colors.white,
+                              borderRadius: BorderRadius.circular(16),
+                              border: Border.all(color: Colors.grey.shade300),
+                            ),
+                            child: Column(
+                              crossAxisAlignment: CrossAxisAlignment.start,
+                              children: [
+                                _sectionTitle('Rules & penalties'),
+                                const SizedBox(height: 10),
+                                if (penalties.isEmpty)
+                                  Text('No penalty details available', style: TextStyle(color: Colors.grey[700]))
+                                else
+                                  ...penalties.map<Widget>((p) {
+                                    return Container(
+                                      margin: const EdgeInsets.only(bottom: 10),
+                                      padding: const EdgeInsets.all(12),
+                                      decoration: BoxDecoration(
+                                        color: Colors.grey.shade50,
+                                        borderRadius: BorderRadius.circular(12),
+                                        border: Border.all(color: Colors.grey.shade300),
+                                      ),
+                                      child: Wrap(
+                                        spacing: 10,
+                                        runSpacing: 10,
+                                        children: [
+                                          _flightInfoChip('Pax', p['paxType']?.toString() ?? 'N/A', backgroundColor: Colors.white),
+                                          _flightInfoChip('Refund allowed', p['refundAllowed']?.toString() ?? 'N/A', backgroundColor: Colors.white),
+                                          _flightInfoChip('Refund penalty', p['refundPenaltyAmount']?.toString() ?? 'N/A', backgroundColor: Colors.white),
+                                          _flightInfoChip('Change allowed', p['changeAllowed']?.toString() ?? 'N/A', backgroundColor: Colors.white),
+                                          _flightInfoChip('Change penalty', p['changePenaltyAmount']?.toString() ?? 'N/A', backgroundColor: Colors.white),
+                                          _flightInfoChip('Currency', p['currency']?.toString() ?? 'N/A', backgroundColor: Colors.white),
+                                        ],
+                                      ),
+                                    );
+                                  }).toList(),
+                              ],
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
+                  ),
+                ),
+              ],
+            ),
+          ),
+        );
+      },
+    );
+  }
+
+  Widget _buildHotelOptionCard(dynamic it) {
+    return Card(
+      elevation: 2,
+      margin: const EdgeInsets.symmetric(vertical: 6),
+      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+      child: Padding(
+        padding: const EdgeInsets.all(12),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            if (it['heroImage'] != null && it['heroImage'].toString().isNotEmpty)
+              ClipRRect(
+                borderRadius: BorderRadius.circular(8),
+                child: Image.network(
+                  _proxyImageUrl(it['heroImage'].toString()),
+                  height: 150,
+                  width: double.infinity,
+                  fit: BoxFit.cover,
+                  errorBuilder: (context, error, stackTrace) => Container(
+                    height: 150,
+                    color: Colors.grey[300],
+                    child: const Icon(Icons.hotel, size: 50, color: Colors.grey),
+                  ),
+                ),
+              ),
+            const SizedBox(height: 12),
+            Row(
+              children: [
+                Expanded(
+                  child: Text(it['name'] ?? 'Hotel Option',
+                      style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 16)),
+                ),
+                if (it['starRating'] != null && it['starRating'] > 0)
+                  Row(
+                    children: List.generate(
+                      it['starRating'],
+                      (index) => const Icon(Icons.star, color: Colors.amber, size: 16),
+                    ),
+                  ),
+              ],
+            ),
+            const SizedBox(height: 8),
+            Row(
+              children: [
+                Text(
+                  '\$${it['ourprice'] ?? 'N/A'}',
+                  style: const TextStyle(
+                      fontSize: 18, fontWeight: FontWeight.bold, color: Colors.green),
+                ),
+                if (it['saving'] != null && it['saving'] > 0)
+                  Padding(
+                    padding: const EdgeInsets.only(left: 8),
+                    child: Text(
+                      'Save \$${it['saving']}',
+                      style: const TextStyle(color: Colors.red, fontWeight: FontWeight.w500),
+                    ),
+                  ),
+              ],
+            ),
+            const SizedBox(height: 4),
+            if (it['distance'] != null)
+              Text(
+                '${it['distance'].toStringAsFixed(1)} km from center',
+                style: TextStyle(color: Colors.grey[600], fontSize: 12),
+              ),
+            if (it['contact'] != null && it['contact']['address'] != null)
+              Text(
+                '${it['contact']['address']['city']?['name'] ?? ''}, ${it['contact']['address']['country']?['name'] ?? ''}',
+                style: TextStyle(color: Colors.grey[600], fontSize: 12),
+              ),
+            const SizedBox(height: 8),
+            if (it['reviews'] != null)
+              Row(
+                children: [
+                  const Icon(Icons.star, color: Colors.amber, size: 14),
+                  Text(
+                    '${it['reviews']['rating'] ?? 'N/A'} (${it['reviews']['count'] ?? 0} reviews)',
+                    style: TextStyle(color: Colors.grey[700], fontSize: 12),
+                  ),
+                ],
+              ),
+            const SizedBox(height: 8),
+            if (it['mainamenity'] != null && it['mainamenity'] is List)
+              Wrap(
+                spacing: 4,
+                runSpacing: 4,
+                children: (it['mainamenity'] as List)
+                    .map<Widget>((amenity) => Chip(
+                          label: Text(amenity, style: const TextStyle(fontSize: 10)),
+                          backgroundColor: Colors.blue.shade50,
+                          padding: EdgeInsets.zero,
+                          materialTapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                        ))
+                    .toList(),
+              ),
+            const SizedBox(height: 8),
+            Row(
+              mainAxisAlignment: MainAxisAlignment.end,
+              children: [
+                TextButton(
+                  onPressed: () => _showHotelDetails(it),
+                  child: const Text('View Details'),
+                ),
+                const SizedBox(width: 8),
+                ElevatedButton(
+                  onPressed: () => _selectCard(it),
+                  child: const Text('Select'),
+                ),
+              ],
+            ),
           ],
         ),
       ),

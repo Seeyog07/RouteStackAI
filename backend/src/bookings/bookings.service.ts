@@ -143,10 +143,88 @@ export class BookingsService {
 
   // 2.1 Revalidate flight after selection
   async revalidateFlight(fareSourceCode: string, key0: number) {
-    const res = await this.mcpRequest('/mcp/flight/revalidate', {
-      fareSourceCode,
-      key_0: key0,
-    });
+    const res = await this.mcpRequest(
+      '/mcp/flight/revalidate',
+      {
+        fareSourceCode,
+        key_0: key0,
+      },
+      process.env.MCP_EVOLVE_BASE_URL || 'https://evolvemcp.routestack.ai',
+      process.env.MCP_BASE_URL,
+    );
+    return res.body;
+  }
+
+  async getFlightPaymentUrl(params: {
+    fareSourceCode: string;
+    key_0?: number;
+    key0?: number;
+    revalidateResult?: any;
+    priceCheckResult?: any;
+    selectedFlight?: any;
+    portalUrl?: string;
+    origin?: string;
+    destination?: string;
+    departureDate?: string;
+  }) {
+    const selectedFlight = params.selectedFlight?.rawFlight || params.selectedFlight || {};
+    const flightPayload =
+      selectedFlight || params.revalidateResult?.flight || params.priceCheckResult?.flight || {};
+
+    const firstLeg = Array.isArray(selectedFlight?.flights) && selectedFlight.flights.length
+      ? selectedFlight.flights[0]
+      : undefined;
+
+    const origin =
+      params.origin ||
+      selectedFlight?.departureCode ||
+      selectedFlight?.origin ||
+      firstLeg?.departure ||
+      '';
+
+    const destination =
+      params.destination ||
+      selectedFlight?.arrivalCode ||
+      selectedFlight?.destination ||
+      firstLeg?.arrival ||
+      '';
+
+    const departureRaw =
+      params.departureDate ||
+      selectedFlight?.departure ||
+      selectedFlight?.departureDate ||
+      firstLeg?.departureTime ||
+      firstLeg?.departureDate ||
+      '';
+
+    const departureDate = /^\d{4}-\d{2}-\d{2}$/.test(departureRaw)
+      ? departureRaw
+      : (typeof departureRaw === 'string' && departureRaw.includes('T')
+          ? departureRaw.split('T')[0]
+          : departureRaw);
+
+    const key_0 = Number(params.key_0 ?? params.key0 ?? 0);
+
+    const body = {
+      fareSourceCode: params.fareSourceCode,
+      key_0,
+      key0: key_0,
+      portalUrl: params.portalUrl || 'https://routestack.ai',
+      revalidateResult: params.revalidateResult,
+      priceCheckResult: params.priceCheckResult || params.revalidateResult,
+      selectedFlight: selectedFlight,
+      flight: flightPayload,
+      origin,
+      destination,
+      departureDate,
+    };
+
+    const res = await this.mcpRequest(
+      '/mcp/flight/get-payment-url',
+      body,
+      process.env.MCP_EVOLVE_BASE_URL || 'https://evolvemcp.routestack.ai',
+      process.env.MCP_BASE_URL,
+    );
     return res.body;
   }
 
@@ -197,11 +275,21 @@ export class BookingsService {
   }
 
   async getBookingInfo(bookingId: string) {
-    return await this.mcpRequest('/mcp/hotel/get-booking-info', { bookingId });
+    return await this.mcpRequest(
+      '/mcp/hotel/get-booking-info',
+      { bookingId },
+      process.env.MCP_EVOLVE_BASE_URL || 'https://evolvemcp.routestack.ai',
+      process.env.MCP_BASE_URL,
+    );
   }
 
   async cancelBooking(bookingId: string) {
-    return await this.mcpRequest('/mcp/hotel/cancel-booking', { bookingId });
+    return await this.mcpRequest(
+      '/mcp/hotel/cancel-booking',
+      { bookingId },
+      process.env.MCP_EVOLVE_BASE_URL || 'https://evolvemcp.routestack.ai',
+      process.env.MCP_BASE_URL,
+    );
   }
 
   // 4. Booking Management
@@ -218,16 +306,18 @@ export class BookingsService {
   }
 
   // 6. Private Helper for MCP API Calls
-  private async mcpRequest(path: string, body: any) {
+  private async mcpRequest(path: string, body: any, baseUrl?: string, authBaseUrl?: string) {
   // 1. Log Environment Variables at the start
   console.log('--- MCP Debug Start ---');
-  console.log('BASE_URL:', process.env.MCP_BASE_URL);
+  console.log('BASE_URL:', baseUrl || process.env.MCP_BASE_URL);
+  console.log('AUTH_BASE_URL:', authBaseUrl || baseUrl || process.env.MCP_BASE_URL);
   console.log('API_KEY:', process.env.MCP_API_KEY ? '✅ Loaded' : '❌ MISSING');
   console.log('API_SECRET:', process.env.MCP_API_SECRET ? '✅ Loaded' : '❌ MISSING');
   console.log('Request Path:', path);
   console.log('Request Body:', JSON.stringify(body));
 
-  const BASE_URL = process.env.MCP_BASE_URL;
+  const BASE_URL = baseUrl || process.env.MCP_BASE_URL;
+  const AUTH_BASE_URL = authBaseUrl || BASE_URL;
   const apiKey = process.env.MCP_API_KEY;
   const apiSecret = process.env.MCP_API_SECRET;
 
@@ -246,7 +336,7 @@ export class BookingsService {
     console.log('Generated HMAC:', hmac);
 
     // Auth Token Step
-    const authRes = await (globalThis as any).fetch(`${BASE_URL}/mcp/auth/partner-token`, {
+    const authRes = await (globalThis as any).fetch(`${AUTH_BASE_URL}/mcp/auth/partner-token`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ apiKey, hmac, timestamp: ts, nonce }),

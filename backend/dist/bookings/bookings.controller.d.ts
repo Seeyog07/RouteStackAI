@@ -27,6 +27,11 @@ export declare class BookingsController {
         recommendationId: string;
         hotelId: string;
     }): Promise<any>;
+    proxyRevalidateFlight(body: {
+        fareSourceCode: string;
+        key_0: number;
+    }): Promise<any>;
+    proxyGetFlightPaymentUrl(body: any): Promise<any>;
     proxyGetBookingInfo(body: {
         bookingId: string;
     }): Promise<any>;

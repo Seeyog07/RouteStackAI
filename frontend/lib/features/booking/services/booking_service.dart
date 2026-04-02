@@ -152,6 +152,119 @@ class BookingService {
     }
   }
 
+  /// Revalidate selected flight
+  Future<dynamic> revalidateFlight({
+    required String fareSourceCode,
+    required num key0,
+  }) async {
+    try {
+      final response = await http.post(
+        Uri.parse('$baseUrl/mcp/flight/revalidate'),
+        headers: {'Content-Type': 'application/json'},
+        body: json.encode({
+          'fareSourceCode': fareSourceCode,
+          'key_0': key0,
+        }),
+      );
+
+      if (response.statusCode == 200 || response.statusCode == 201) {
+        if (response.body.trim().isEmpty) return {'success': true};
+        return json.decode(response.body);
+      }
+
+      return {
+        'success': false,
+        'message': 'Failed to revalidate flight: ${response.statusCode}',
+        'rawData': response.body,
+      };
+    } catch (e, st) {
+      debugPrint('Flight revalidation error: $e\n$st');
+      return {
+        'success': false,
+        'message': 'Network error: $e',
+      };
+    }
+  }
+
+  /// Get payment URL for selected flight
+  Future<dynamic> getFlightPaymentUrl({
+    required String fareSourceCode,
+    required num key0,
+    dynamic revalidateResult,
+    dynamic selectedFlight,
+    String? origin,
+    String? destination,
+    String? departureDate,
+  }) async {
+    try {
+      final response = await http.post(
+        Uri.parse('$baseUrl/mcp/flight/get-payment-url'),
+        headers: {'Content-Type': 'application/json'},
+        body: json.encode({
+          'fareSourceCode': fareSourceCode,
+          'key_0': key0,
+          'key0': key0,
+          'revalidateResult': revalidateResult,
+          'priceCheckResult': revalidateResult,
+          'selectedFlight': selectedFlight,
+          if (origin != null && origin.isNotEmpty) 'origin': origin,
+          if (destination != null && destination.isNotEmpty) 'destination': destination,
+          if (departureDate != null && departureDate.isNotEmpty) 'departureDate': departureDate,
+          'portalUrl': 'https://routestack.ai',
+        }),
+      );
+
+      if (response.statusCode == 200 || response.statusCode == 201) {
+        if (response.body.trim().isEmpty) return {'success': false};
+        return json.decode(response.body);
+      }
+
+      return {
+        'success': false,
+        'message': 'Failed to get flight payment URL: ${response.statusCode}',
+        'rawData': response.body,
+      };
+    } catch (e, st) {
+      debugPrint('Flight payment URL error: $e\n$st');
+      return {
+        'success': false,
+        'message': 'Network error: $e',
+      };
+    }
+  }
+
+  /// Create a booking record and return backend booking ID
+  Future<String?> createBookingRecord({
+    required String name,
+    required String type,
+    required String itemId,
+    String? details,
+  }) async {
+    try {
+      final response = await http.post(
+        Uri.parse('$baseUrl/book'),
+        headers: {'Content-Type': 'application/json'},
+        body: json.encode({
+          'name': name,
+          'type': type,
+          'itemId': itemId,
+          if (details != null && details.isNotEmpty) 'details': details,
+        }),
+      );
+
+      if (response.statusCode == 200 || response.statusCode == 201) {
+        final data = json.decode(response.body);
+        return data is Map ? data['id']?.toString() : null;
+      }
+
+      debugPrint('Failed to create booking record: ${response.statusCode}');
+      return null;
+    } catch (e, st) {
+      debugPrint('Create booking record error: $e\n$st');
+      return null;
+    }
+  }
+
   /// Get hotel details (fallback for revalidate token/recommendationId)
   Future<dynamic> getHotelDetails(String hotelId) async {
     try {

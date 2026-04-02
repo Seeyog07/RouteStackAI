@@ -134,7 +134,6 @@ class _ImageCarouselWidgetState extends State<ImageCarouselWidget> {
                     _animatePageView(viewModel.currentIndex - 1);
                   },
                   icon: Icons.chevron_left,
-                  tooltip: 'Previous',
                 ),
               ),
             ),
@@ -151,7 +150,6 @@ class _ImageCarouselWidgetState extends State<ImageCarouselWidget> {
                     _animatePageView(viewModel.currentIndex + 1);
                   },
                   icon: Icons.chevron_right,
-                  tooltip: 'Next',
                 ),
               ),
             ),
@@ -195,7 +193,6 @@ class _ImageCarouselWidgetState extends State<ImageCarouselWidget> {
   Widget _buildNavButton({
     required VoidCallback onPressed,
     required IconData icon,
-    required String tooltip,
   }) {
     return Container(
       decoration: BoxDecoration(
@@ -215,7 +212,6 @@ class _ImageCarouselWidgetState extends State<ImageCarouselWidget> {
           color: widget.primaryColor,
           size: 28,
         ),
-        tooltip: tooltip,
         constraints: BoxConstraints(minWidth: 48, minHeight: 48),
         padding: EdgeInsets.zero,
       ),
