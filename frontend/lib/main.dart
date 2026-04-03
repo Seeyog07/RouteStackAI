@@ -11,6 +11,12 @@ import 'features/hotel_details/widgets/image_carousel_widget.dart';
 import 'features/booking/services/booking_service.dart';
 import 'features/booking/widgets/booking_confirmation_dialog.dart';
 
+enum HotelSortMode {
+  defaultOrder,
+  priceLowToHigh,
+  priceHighToLow,
+}
+
 void main() => runApp(RouteStackApp());
 
 class RouteStackApp extends StatelessWidget {
@@ -65,6 +71,8 @@ class _HomePageState extends State<HomePage> {
 
   String? _pendingBookingQuery;
   bool? _awaitingTravelerCounts = false;
+  HotelSortMode _hotelSortMode = HotelSortMode.defaultOrder;
+  HotelSortMode _flightSortMode = HotelSortMode.defaultOrder;
 
   String get base {
     if (kIsWeb) return 'http://localhost:3000/api';
@@ -389,15 +397,85 @@ class _HomePageState extends State<HomePage> {
     return {'adults': adults, 'children': children};
   }
 
+  String? _buildIsoDate(int year, int month, int day) {
+    final date = DateTime(year, month, day);
+    if (date.year != year || date.month != month || date.day != day) {
+      return null;
+    }
+
+    final y = date.year.toString().padLeft(4, '0');
+    final mm = date.month.toString().padLeft(2, '0');
+    final dd = date.day.toString().padLeft(2, '0');
+    return '$y-$mm-$dd';
+  }
+
   String? _normalizeNaturalDate(String raw, {required int defaultYear}) {
-    final m = RegExp(
+    final numericMatch = RegExp(
+      r'^\s*(\d{1,2})/(\d{1,2})/(\d{4})\s*$',
+    ).firstMatch(raw);
+    if (numericMatch != null) {
+      final first = int.tryParse(numericMatch.group(1) ?? '');
+      final second = int.tryParse(numericMatch.group(2) ?? '');
+      final year = int.tryParse(numericMatch.group(3) ?? '');
+      if (first == null || second == null || year == null) return null;
+
+      final ddMm = _buildIsoDate(year, second, first);
+      final mmDd = _buildIsoDate(year, first, second);
+
+      if (first > 12) return ddMm;
+      if (second > 12) return mmDd;
+      return ddMm ?? mmDd;
+    }
+
+    final monthFirstMatch = RegExp(
+      r'^\s*([a-zA-Z]+)\s+(\d{1,2})(?:st|nd|rd|th)?(?:\s+(\d{4}))?\s*$',
+    ).firstMatch(raw);
+    if (monthFirstMatch != null) {
+      final monthToken = (monthFirstMatch.group(1) ?? '').toLowerCase();
+      final day = int.tryParse(monthFirstMatch.group(2) ?? '');
+      final year = int.tryParse(monthFirstMatch.group(3) ?? '') ?? defaultYear;
+      if (day == null) return null;
+
+      const monthMap = {
+        'jan': 1,
+        'january': 1,
+        'feb': 2,
+        'february': 2,
+        'mar': 3,
+        'march': 3,
+        'apr': 4,
+        'april': 4,
+        'may': 5,
+        'jun': 6,
+        'june': 6,
+        'jul': 7,
+        'july': 7,
+        'aug': 8,
+        'august': 8,
+        'sep': 9,
+        'sept': 9,
+        'september': 9,
+        'oct': 10,
+        'october': 10,
+        'nov': 11,
+        'november': 11,
+        'dec': 12,
+        'december': 12,
+      };
+
+      final month = monthMap[monthToken];
+      if (month == null) return null;
+      return _buildIsoDate(year, month, day);
+    }
+
+    final dayFirstMatch = RegExp(
       r'^\s*(\d{1,2})(?:st|nd|rd|th)?\s+([a-zA-Z]+)(?:\s+(\d{4}))?\s*$',
     ).firstMatch(raw);
-    if (m == null) return null;
+    if (dayFirstMatch == null) return null;
 
-    final day = int.tryParse(m.group(1) ?? '');
-    final monthToken = (m.group(2) ?? '').toLowerCase();
-    final year = int.tryParse(m.group(3) ?? '') ?? defaultYear;
+    final day = int.tryParse(dayFirstMatch.group(1) ?? '');
+    final monthToken = (dayFirstMatch.group(2) ?? '').toLowerCase();
+    final year = int.tryParse(dayFirstMatch.group(3) ?? '') ?? defaultYear;
     if (day == null) return null;
 
     const monthMap = {
@@ -429,21 +507,13 @@ class _HomePageState extends State<HomePage> {
 
     final month = monthMap[monthToken];
     if (month == null) return null;
-
-    final date = DateTime(year, month, day);
-    if (date.year != year || date.month != month || date.day != day)
-      return null;
-
-    final y = date.year.toString().padLeft(4, '0');
-    final mm = date.month.toString().padLeft(2, '0');
-    final dd = date.day.toString().padLeft(2, '0');
-    return '$y-$mm-$dd';
+    return _buildIsoDate(year, month, day);
   }
 
   String _normalizeNaturalDatesInMessage(String message) {
     final nowYear = DateTime.now().year;
     final naturalDateRegex = RegExp(
-      r'\b\d{1,2}(?:st|nd|rd|th)?\s+[a-zA-Z]+(?:\s+\d{4})?\b',
+      r'\b(?:\d{4}-\d{2}-\d{2}|\d{1,2}/\d{1,2}/\d{4}|\d{1,2}(?:st|nd|rd|th)?\s+[a-zA-Z]+(?:\s+\d{4})?|[a-zA-Z]+\s+\d{1,2}(?:st|nd|rd|th)?(?:\s+\d{4})?)\b',
       caseSensitive: false,
     );
 
@@ -455,9 +525,9 @@ class _HomePageState extends State<HomePage> {
   }
 
   /// Check if string is a date in format YYYY-MM-DD
-  bool _isDateFormat(String text) {
-    final dateRegex = RegExp(r'^\d{4}-\d{2}-\d{2}$');
-    return dateRegex.hasMatch(text.trim());
+  bool _isSupportedDateFormat(String text) {
+    return _normalizeNaturalDate(text.trim(), defaultYear: DateTime.now().year) !=
+        null;
   }
 
   /// Extract search parameters (city, check-in, check-out) from user message
@@ -468,14 +538,23 @@ class _HomePageState extends State<HomePage> {
     String? checkIn;
     String? checkOut;
 
-    // Look for date patterns (YYYY-MM-DD)
-    final dateRegex = RegExp(r'\d{4}-\d{2}-\d{2}');
+    // Look for date patterns in supported formats and normalize to YYYY-MM-DD.
+    final dateRegex = RegExp(
+      r'\b(?:\d{4}-\d{2}-\d{2}|\d{1,2}/\d{1,2}/\d{4}|\d{1,2}(?:st|nd|rd|th)?\s+[a-zA-Z]+(?:\s+\d{4})?|[a-zA-Z]+\s+\d{1,2}(?:st|nd|rd|th)?(?:\s+\d{4})?)\b',
+      caseSensitive: false,
+    );
     final dates = dateRegex.allMatches(normalizedMessage);
 
     if (dates.isNotEmpty) {
-      checkIn = dates.first.group(0);
+      checkIn = _normalizeNaturalDate(
+        dates.first.group(0)!,
+        defaultYear: DateTime.now().year,
+      );
       if (dates.length > 1) {
-        checkOut = dates.elementAt(1).group(0);
+        checkOut = _normalizeNaturalDate(
+          dates.elementAt(1).group(0)!,
+          defaultYear: DateTime.now().year,
+        );
       }
     }
 
@@ -493,7 +572,7 @@ class _HomePageState extends State<HomePage> {
       final afterIn = normalizedMessage.substring(idx);
       final beforeFrom = afterIn.split(' from').first.trim();
       final beforeDate = beforeFrom.split(' on').first.trim();
-      if (beforeDate.isNotEmpty && !_isDateFormat(beforeDate)) {
+      if (beforeDate.isNotEmpty && !_isSupportedDateFormat(beforeDate)) {
         city = beforeDate;
       }
     }
@@ -506,10 +585,15 @@ class _HomePageState extends State<HomePage> {
     final params = _extractSearchParameters(userMessage);
 
     // If this looks like just a checkout date and we have previous context
-    if (_isDateFormat(userMessage.trim()) &&
+    final normalizedSingleDate = _normalizeNaturalDate(
+      userMessage.trim(),
+      defaultYear: DateTime.now().year,
+    );
+
+    if (normalizedSingleDate != null &&
         lastSearchCity != null &&
         lastSearchCheckIn != null) {
-      final checkOut = userMessage.trim();
+      final checkOut = normalizedSingleDate;
       lastSearchCheckOut = checkOut;
       isWaitingForCheckOut = false;
       return 'Hotel in $lastSearchCity from $lastSearchCheckIn to $checkOut';
@@ -1235,11 +1319,31 @@ class _HomePageState extends State<HomePage> {
         return;
       }
 
+      final normalizedCheckIn = _normalizeNaturalDate(
+        checkIn,
+        defaultYear: DateTime.now().year,
+      );
+      final normalizedCheckOut = _normalizeNaturalDate(
+        checkOut,
+        defaultYear: DateTime.now().year,
+      );
+
+      if (normalizedCheckIn == null || normalizedCheckOut == null) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text(
+              'Please use a supported date format like YYYY-MM-DD, DD/MM/YYYY, MM/DD/YYYY, June 2, or 2nd June.',
+            ),
+          ),
+        );
+        return;
+      }
+
       // Step 1: call mcp/hotel/search-hotels
       final hotelsResp = await bookingService.searchHotels(
         destinationId: destinationId,
-        checkIn: checkIn,
-        checkOut: checkOut,
+        checkIn: normalizedCheckIn,
+        checkOut: normalizedCheckOut,
         rooms: defaultRoomsConfig,
         lat: lat,
         long: long,
@@ -1269,8 +1373,8 @@ class _HomePageState extends State<HomePage> {
       }
       lastDestinationId = destinationId;
       lastSearchCity = city;
-      lastSearchCheckIn = checkIn;
-      lastSearchCheckOut = checkOut;
+      lastSearchCheckIn = normalizedCheckIn;
+      lastSearchCheckOut = normalizedCheckOut;
 
       final normalizedCards = hotels.map((h) {
         if (h is! Map) return h;
@@ -1283,8 +1387,8 @@ class _HomePageState extends State<HomePage> {
           'token': h['token'] ?? h['hotelToken'] ?? token,
           'recommendationId': recommendationId ?? lastRecommendationId,
           'destinationId': h['destinationId'] ?? destinationId,
-          'checkIn': checkIn,
-          'checkOut': checkOut,
+          'checkIn': normalizedCheckIn,
+          'checkOut': normalizedCheckOut,
           'rooms': h['rooms'] ?? defaultRoomsConfig,
           if (correlationId != null && correlationId.isNotEmpty)
             'correlationId': correlationId,
@@ -1437,6 +1541,9 @@ class _HomePageState extends State<HomePage> {
     final screenWidth = MediaQuery.of(context).size.width;
     final preferredWidth = screenWidth * 0.86;
     final maxCardWidth = preferredWidth > 780 ? 780.0 : preferredWidth;
+    final cards = m.cards ?? [];
+    final hotelCards = cards.where(_isHotelCard).toList();
+    final flightCards = cards.where(_isFlightCard).toList();
 
     return Align(
       alignment: Alignment.centerLeft,
@@ -1459,13 +1566,164 @@ class _HomePageState extends State<HomePage> {
                   padding: const EdgeInsets.only(bottom: 8),
                   child: Text(m.text!,
                       style: const TextStyle(fontWeight: FontWeight.w600))),
-            ...m.cards!
-                .map((it) => _isFlightCard(it)
-                    ? _buildFlightOptionCard(it)
-                    : _buildHotelOptionCard(it))
-                .toList(),
+            if (hotelCards.isNotEmpty) _buildHotelTabs(hotelCards),
+            if (flightCards.isNotEmpty) _buildFlightTabs(flightCards),
           ],
         ),
+      ),
+    );
+  }
+
+  List<List<dynamic>> _chunkCards(List<dynamic> cards, int chunkSize) {
+    if (cards.isEmpty) return [];
+    final chunks = <List<dynamic>>[];
+    for (var index = 0; index < cards.length; index += chunkSize) {
+      final end =
+          (index + chunkSize < cards.length) ? index + chunkSize : cards.length;
+      chunks.add(cards.sublist(index, end));
+    }
+    return chunks;
+  }
+
+  double? _priceForHotelCard(dynamic hotelCard) {
+    if (hotelCard is! Map) return null;
+
+    final candidates = [
+      hotelCard['ourprice'],
+      hotelCard['price'],
+      hotelCard['displayedPrice'],
+      hotelCard['nightlyPrice'],
+      hotelCard['totalPrice'],
+    ];
+
+    for (final candidate in candidates) {
+      if (candidate == null) continue;
+      final parsed = double.tryParse(candidate.toString().replaceAll(',', ''));
+      if (parsed != null) return parsed;
+    }
+
+    return null;
+  }
+
+  List<dynamic> _sortHotelCardsByPrice(List<dynamic> hotelCards) {
+    if (hotelCards.length < 2) return List<dynamic>.from(hotelCards);
+
+    final sortedCards = List<dynamic>.from(hotelCards);
+    if (_hotelSortMode == HotelSortMode.defaultOrder) return sortedCards;
+
+    sortedCards.sort((left, right) {
+      final leftPrice = _priceForHotelCard(left);
+      final rightPrice = _priceForHotelCard(right);
+
+      if (leftPrice == null && rightPrice == null) return 0;
+      if (leftPrice == null) return 1;
+      if (rightPrice == null) return -1;
+
+      return _hotelSortMode == HotelSortMode.priceLowToHigh
+          ? leftPrice.compareTo(rightPrice)
+          : rightPrice.compareTo(leftPrice);
+    });
+
+    return sortedCards;
+  }
+
+  Widget _buildPriceSortControls({
+    required HotelSortMode selectedMode,
+    required ValueChanged<HotelSortMode> onChanged,
+  }) {
+    return Wrap(
+      spacing: 8,
+      runSpacing: 8,
+      children: [
+        ChoiceChip(
+          label: const Text('Default'),
+          selected: selectedMode == HotelSortMode.defaultOrder,
+          onSelected: (_) => onChanged(HotelSortMode.defaultOrder),
+        ),
+        ChoiceChip(
+          label: const Text('Price: Low to High'),
+          selected: selectedMode == HotelSortMode.priceLowToHigh,
+          onSelected: (_) => onChanged(HotelSortMode.priceLowToHigh),
+        ),
+        ChoiceChip(
+          label: const Text('Price: High to Low'),
+          selected: selectedMode == HotelSortMode.priceHighToLow,
+          onSelected: (_) => onChanged(HotelSortMode.priceHighToLow),
+        ),
+      ],
+    );
+  }
+
+  Widget _buildHotelTabs(List<dynamic> hotelCards) {
+    final sortedCards = _sortHotelCardsByPrice(hotelCards);
+    final groups = _chunkCards(sortedCards, 3);
+    if (groups.isEmpty) {
+      return const SizedBox.shrink();
+    }
+
+    final sortControls = Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        const Text(
+          'Sort hotels by price',
+          style: TextStyle(fontWeight: FontWeight.w600, fontSize: 13),
+        ),
+        const SizedBox(height: 8),
+          _buildPriceSortControls(
+            selectedMode: _hotelSortMode,
+            onChanged: (mode) {
+              setState(() => _hotelSortMode = mode);
+            },
+          ),
+      ],
+    );
+
+    if (groups.length == 1) {
+      return Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          sortControls,
+          const SizedBox(height: 12),
+          ...groups.first.map((it) => _buildHotelOptionCard(it)).toList(),
+        ],
+      );
+    }
+
+    return DefaultTabController(
+      length: groups.length,
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          sortControls,
+          const SizedBox(height: 12),
+          TabBar(
+            isScrollable: true,
+            indicatorColor: Colors.indigo,
+            labelColor: Colors.indigo,
+            unselectedLabelColor: Colors.grey[700],
+            tabs: [
+              for (var index = 0; index < groups.length; index++)
+                Tab(
+                    text:
+                        '${index * 3 + 1}-${index * 3 + groups[index].length}'),
+            ],
+          ),
+          const SizedBox(height: 12),
+          SizedBox(
+            height: 980,
+            child: TabBarView(
+              children: [
+                for (final group in groups)
+                  SingleChildScrollView(
+                    child: Column(
+                      children:
+                          group.map((it) => _buildHotelOptionCard(it)).toList(),
+                    ),
+                  ),
+              ],
+            ),
+          ),
+        ],
       ),
     );
   }
@@ -2583,7 +2841,8 @@ class _HomePageState extends State<HomePage> {
                 child: TextField(
                     controller: checkInCtrl,
                     decoration: const InputDecoration(
-                        labelText: 'Check-in (YYYY-MM-DD)',
+                      labelText:
+                        'Check-in (YYYY-MM-DD, DD/MM/YYYY, MM/DD/YYYY, June 2)',
                         filled: true,
                         fillColor: Colors.white,
                         border: OutlineInputBorder()))),
@@ -2592,7 +2851,8 @@ class _HomePageState extends State<HomePage> {
                 child: TextField(
                     controller: checkOutCtrl,
                     decoration: const InputDecoration(
-                        labelText: 'Check-out (YYYY-MM-DD)',
+                      labelText:
+                        'Check-out (YYYY-MM-DD, DD/MM/YYYY, MM/DD/YYYY, 2nd June)',
                         filled: true,
                         fillColor: Colors.white,
                         border: OutlineInputBorder()))),
@@ -2712,6 +2972,122 @@ class _HomePageState extends State<HomePage> {
     } finally {
       setState(() => loading = false);
     }
+  }
+
+  double? _priceForFlightCard(dynamic flightCard) {
+    if (flightCard is! Map) return null;
+
+    final candidates = [
+      flightCard['price'],
+      flightCard['showOurprice'],
+      flightCard['totalFare'],
+      flightCard['baseFare'],
+      flightCard['key_0'],
+    ];
+
+    for (final candidate in candidates) {
+      if (candidate == null) continue;
+      final parsed = double.tryParse(candidate.toString().replaceAll(',', ''));
+      if (parsed != null) return parsed;
+    }
+
+    return null;
+  }
+
+  List<dynamic> _sortFlightCardsByPrice(List<dynamic> flightCards) {
+    if (flightCards.length < 2) return List<dynamic>.from(flightCards);
+
+    final sortedCards = List<dynamic>.from(flightCards);
+    if (_flightSortMode == HotelSortMode.defaultOrder) return sortedCards;
+
+    sortedCards.sort((left, right) {
+      final leftPrice = _priceForFlightCard(left);
+      final rightPrice = _priceForFlightCard(right);
+
+      if (leftPrice == null && rightPrice == null) return 0;
+      if (leftPrice == null) return 1;
+      if (rightPrice == null) return -1;
+
+      return _flightSortMode == HotelSortMode.priceLowToHigh
+          ? leftPrice.compareTo(rightPrice)
+          : rightPrice.compareTo(leftPrice);
+    });
+
+    return sortedCards;
+  }
+
+  Widget _buildFlightTabs(List<dynamic> flightCards) {
+    final sortedCards = _sortFlightCardsByPrice(flightCards);
+    final groups = _chunkCards(sortedCards, 3);
+    if (groups.isEmpty) {
+      return const SizedBox.shrink();
+    }
+
+    final sortControls = Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        const Text(
+          'Sort flights by price',
+          style: TextStyle(fontWeight: FontWeight.w600, fontSize: 13),
+        ),
+        const SizedBox(height: 8),
+        _buildPriceSortControls(
+          selectedMode: _flightSortMode,
+          onChanged: (mode) {
+            setState(() => _flightSortMode = mode);
+          },
+        ),
+      ],
+    );
+
+    if (groups.length == 1) {
+      return Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          sortControls,
+          const SizedBox(height: 12),
+          ...groups.first.map((it) => _buildFlightOptionCard(it)).toList(),
+        ],
+      );
+    }
+
+    return DefaultTabController(
+      length: groups.length,
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          sortControls,
+          const SizedBox(height: 12),
+          TabBar(
+            isScrollable: true,
+            indicatorColor: Colors.indigo,
+            labelColor: Colors.indigo,
+            unselectedLabelColor: Colors.grey[700],
+            tabs: [
+              for (var index = 0; index < groups.length; index++)
+                Tab(
+                    text:
+                        '${index * 3 + 1}-${index * 3 + groups[index].length}'),
+            ],
+          ),
+          const SizedBox(height: 12),
+          SizedBox(
+            height: 980,
+            child: TabBarView(
+              children: [
+                for (final group in groups)
+                  SingleChildScrollView(
+                    child: Column(
+                      children:
+                          group.map((it) => _buildFlightOptionCard(it)).toList(),
+                    ),
+                  ),
+              ],
+            ),
+          ),
+        ],
+      ),
+    );
   }
 
   void _showHotelDetailsDialog(dynamic hotel, dynamic details, dynamic rates) {
