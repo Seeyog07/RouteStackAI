@@ -39,6 +39,7 @@ export class BookingsController {
 
   @Post('mcp/hotel/search-hotels')
   async proxySearchHotels(@Body() body: any) {
+    console.log('[proxySearchHotels] request received');
     const res = await this.service.searchHotels(body);
     return res.body;
   }
@@ -51,7 +52,24 @@ export class BookingsController {
 
   @Post('mcp/hotel/get-rooms-and-rates')
   async proxyGetRoomsAndRates(@Body() body: { token: string; hotelId: string; checkIn?: string; checkOut?: string; rooms?: any[] }) {
+    console.log('[proxyGetRoomsAndRates] request received');
     const res = await this.service.getRoomsAndRates(body.token, body.hotelId, body.checkIn, body.checkOut, body.rooms);
+    return res.body;
+  }
+
+  @Post('mcp/hotel/get-hotel-details-and-rates')
+  async proxyGetHotelDetailsAndRates(
+    @Body()
+    body: {
+      hotelId: string;
+      token: string;
+      checkIn: string;
+      checkOut: string;
+      rooms: any[];
+      correlationId?: string;
+    },
+  ) {
+    const res = await this.service.getHotelDetailsAndRates(body);
     return res.body;
   }
 
@@ -63,8 +81,7 @@ export class BookingsController {
 
   @Post('mcp/hotel/revalidate')
   async proxyRevalidateHotel(@Body() body: { token: string; recommendationId: string; hotelId: string }) {
-    const res = await this.service.revalidateHotel(body.token, body.recommendationId, body.hotelId);
-    return res.body;
+    return await this.service.revalidateHotel(body.token, body.recommendationId, body.hotelId);
   }
 
   @Post('mcp/flight/revalidate')

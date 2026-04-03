@@ -186,6 +186,19 @@ let BookingsService = class BookingsService {
     async getHotelDetails(hotelId) {
         return await this.mcpRequest('/mcp/hotel/get-hotel-details', { hotelId });
     }
+    async getHotelDetailsAndRates(params) {
+        const bodyData = {
+            hotelId: params.hotelId,
+            token: params.token,
+            checkIn: params.checkIn,
+            checkOut: params.checkOut,
+            rooms: params.rooms,
+        };
+        if (params.correlationId) {
+            bodyData.correlationId = params.correlationId;
+        }
+        return await this.mcpRequest('/mcp/hotel/get-hotel-details-and-rates', bodyData);
+    }
     async getRoomsAndRates(token, hotelId, checkIn, checkOut, rooms) {
         if (!token || token.trim() === '') {
             console.warn('[getRoomsAndRates] Skipping MCP call: token is empty');

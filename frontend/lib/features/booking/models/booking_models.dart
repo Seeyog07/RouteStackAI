@@ -37,9 +37,14 @@ class RoomRate {
   final String roomName;
   final String? description;
   final int? maxOccupancy;
+  final int? maxAdults;
+  final int? maxChildren;
+  final String? recommendationId;
   final String? priceAmount;
   final String? priceCurrency;
   final String? cancellationPolicy;
+  final String? bedSummary;
+  final List<String> amenities;
   final dynamic rateFull;
 
   RoomRate({
@@ -47,14 +52,20 @@ class RoomRate {
     required this.roomName,
     this.description,
     this.maxOccupancy,
+    this.maxAdults,
+    this.maxChildren,
+    this.recommendationId,
     this.priceAmount,
     this.priceCurrency,
     this.cancellationPolicy,
+    this.bedSummary,
+    this.amenities = const [],
     this.rateFull,
   });
 
   factory RoomRate.fromJson(dynamic roomData) {
-    final ratesList = (roomData['rates'] is List) ? roomData['rates'] as List : [];
+    final ratesList =
+        (roomData['rates'] is List) ? roomData['rates'] as List : [];
     final firstRate = ratesList.isNotEmpty ? ratesList.first : null;
 
     String? priceAmount;
@@ -66,17 +77,56 @@ class RoomRate {
 
     String? cancellationPolicy;
     if (firstRate != null && firstRate['cancellation_policy'] is Map) {
-      cancellationPolicy = firstRate['cancellation_policy']['description']?.toString();
+      cancellationPolicy =
+          firstRate['cancellation_policy']['description']?.toString();
+    }
+
+    final occupancy = roomData['occupancy']?['max_allowed'];
+    final maxOccupancy = occupancy?['total'] as int?;
+    final maxAdults = occupancy?['adults'] as int?;
+    final maxChildren = occupancy?['children'] as int?;
+
+    final bedGroups = roomData['bed_groups'];
+    String? bedSummary;
+    if (bedGroups is Map && bedGroups.isNotEmpty) {
+      final firstBedGroup = bedGroups.values.first;
+      if (firstBedGroup is Map) {
+        bedSummary = firstBedGroup['description']?.toString();
+      }
+    }
+
+    List<String> amenities = [];
+    final amenitiesMap = roomData['amenities'];
+    if (amenitiesMap is Map) {
+      amenities = amenitiesMap.values
+          .whereType<Map>()
+          .map((a) => a['name']?.toString() ?? '')
+          .where((name) => name.isNotEmpty)
+          .take(6)
+          .toList();
+    }
+
+    String? overview = roomData['descriptions']?['overview']?.toString();
+    if (overview != null && overview.isNotEmpty) {
+      overview = overview
+          .replaceAll(RegExp(r'<[^>]*>'), ' ')
+          .replaceAll(RegExp(r'\s+'), ' ')
+          .trim();
     }
 
     return RoomRate(
       roomId: roomData['id']?.toString() ?? '',
       roomName: roomData['name'] ?? 'Standard Room',
-      description: roomData['descriptions']?['overview']?.toString(),
-      maxOccupancy: roomData['occupancy']?['max_allowed']?['total'] as int?,
+      description: overview,
+      maxOccupancy: maxOccupancy,
+      maxAdults: maxAdults,
+      maxChildren: maxChildren,
+      recommendationId: roomData['recommendationId']?.toString(),
       priceAmount: priceAmount,
       priceCurrency: priceCurrency,
       cancellationPolicy: cancellationPolicy,
+      bedSummary: bedSummary,
+      amenities: amenities,
       rateFull: firstRate,
     );
   }
@@ -100,7 +150,8 @@ class BookingDetails {
 
   bool get isValid => revalidation.success;
   String? get hotelName => hotel['name'];
-  String? get hotelPrice => hotel['ourprice']?.toString() ?? hotel['price']?.toString();
+  String? get hotelPrice =>
+      hotel['ourprice']?.toString() ?? hotel['price']?.toString();
 }
 
 class PaymentResult {
@@ -125,10 +176,16 @@ class PaymentResult {
       );
     }
 
-    final url = json['paymentUrl'] ?? json['payment_url'] ?? json['result']?['paymentUrl'];
+    final url = json['paymentUrl'] ??
+        json['payment_url'] ??
+        json['url'] ??
+        json['result']?['paymentUrl'] ??
+        json['result']?['url'];
+    final paymentUrl = url?.toString();
     return PaymentResult(
-      success: json['success'] == true || url != null,
-      paymentUrl: url?.toString(),
+      success: json['success'] == true ||
+          (paymentUrl != null && paymentUrl.isNotEmpty),
+      paymentUrl: paymentUrl,
       message: json['message']?.toString(),
       rawData: json,
     );

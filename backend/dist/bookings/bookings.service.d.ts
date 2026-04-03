@@ -33,6 +33,17 @@ export declare class BookingsService {
         status: any;
         body: any;
     }>;
+    getHotelDetailsAndRates(params: {
+        hotelId: string;
+        token: string;
+        checkIn: string;
+        checkOut: string;
+        rooms: any[];
+        correlationId?: string;
+    }): Promise<{
+        status: any;
+        body: any;
+    }>;
     getRoomsAndRates(token: string, hotelId: string, checkIn?: string, checkOut?: string, rooms?: any[]): Promise<{
         status: any;
         body: any;

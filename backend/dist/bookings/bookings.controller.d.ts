@@ -21,6 +21,14 @@ export declare class BookingsController {
         checkOut?: string;
         rooms?: any[];
     }): Promise<any>;
+    proxyGetHotelDetailsAndRates(body: {
+        hotelId: string;
+        token: string;
+        checkIn: string;
+        checkOut: string;
+        rooms: any[];
+        correlationId?: string;
+    }): Promise<any>;
     proxyGetPaymentUrl(body: any): Promise<any>;
     proxyRevalidateHotel(body: {
         token: string;

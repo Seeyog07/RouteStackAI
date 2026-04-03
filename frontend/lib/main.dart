@@ -50,13 +50,13 @@ class _HomePageState extends State<HomePage> {
   String? sessionId;
   bool loading = false;
   late BookingService bookingService;
-  
+
   // Search context tracking for multi-turn conversations
   String? lastSearchCity;
   String? lastSearchCheckIn;
   String? lastSearchCheckOut;
   bool isWaitingForCheckOut = false;
-  
+
   // Destination tracking for hotel revalidation
   String? lastDestinationId;
   String? lastDestinationCode;
@@ -170,33 +170,34 @@ class _HomePageState extends State<HomePage> {
                       flight['totalFare'],
                   'name':
                       '${mainFlight['airline']} ${mainFlight['flightCode']}${mainFlight['flightNumber']}',
-                    'airline': mainFlight['airline'],
-                    'airlineCode': mainFlight['flightCode'],
-                    'flightNumber': mainFlight['flightNumber'],
-                    'departureCode': mainFlight['departure'],
-                    'arrivalCode': mainFlight['arrival'],
-                    'departureLocation': mainFlight['departurelocation'],
-                    'arrivalLocation': mainFlight['arrivallocation'],
-                    'fareFamily': mainFlight['fareFamily'],
+                  'airline': mainFlight['airline'],
+                  'airlineCode': mainFlight['flightCode'],
+                  'flightNumber': mainFlight['flightNumber'],
+                  'departureCode': mainFlight['departure'],
+                  'arrivalCode': mainFlight['arrival'],
+                  'departureLocation': mainFlight['departurelocation'],
+                  'arrivalLocation': mainFlight['arrivallocation'],
+                  'fareFamily': mainFlight['fareFamily'],
                   'price': flight['showOurprice'] ?? flight['totalFare'] ?? '0',
-                    'baseFare': flight['baseFare'],
-                    'totalFare': flight['totalFare'],
-                    'taxes': flight['taxes'],
-                    'taxBreakUp': flight['taxBreakUp'],
+                  'baseFare': flight['baseFare'],
+                  'totalFare': flight['totalFare'],
+                  'taxes': flight['taxes'],
+                  'taxBreakUp': flight['taxBreakUp'],
                   'stops': flight['stops'] ?? 0,
                   'departure': mainFlight['departureTime'],
                   'arrival': mainFlight['arrivalTime'],
-                    'segments': flight['flights'],
-                    'ticketingTime': flight['ticketingTime'],
-                    'exchangeTime': flight['exchangeTime'],
-                    'voidTime': flight['voidTime'],
-                    'penaltyDetails': flight['penaltydetails'],
-                    'rawFlight': flight,
+                  'segments': flight['flights'],
+                  'ticketingTime': flight['ticketingTime'],
+                  'exchangeTime': flight['exchangeTime'],
+                  'voidTime': flight['voidTime'],
+                  'penaltyDetails': flight['penaltydetails'],
+                  'rawFlight': flight,
                   // Preserve destination info for bookings
                   'destinationId': flight['destinationId'],
                   'destinationCode': flight['destinationCode'],
                   'token': flight['token'] ?? flight['result']?['token'],
-                  'recommendationId': flight['recommendationId'] ?? flight['result']?['recommendationId'],
+                  'recommendationId': flight['recommendationId'] ??
+                      flight['result']?['recommendationId'],
                 };
               }
             }
@@ -233,27 +234,42 @@ class _HomePageState extends State<HomePage> {
         if (firstCard['token'] != null) {
           lastToken = firstCard['token'].toString();
         }
-        if (firstCard['recommendationId'] != null) {
-          lastRecommendationId = firstCard['recommendationId'].toString();
+        final firstCardRecommendationId =
+            firstCard['recommendationId']?.toString().trim();
+        if (firstCardRecommendationId != null &&
+            firstCardRecommendationId.isNotEmpty) {
+          lastRecommendationId = firstCardRecommendationId;
         }
       }
 
       final normalizedCards = cards.map((item) {
         if (item is Map) {
+          final itemRecommendationId =
+              item['recommendationId']?.toString().trim();
+          final nestedRecommendationId =
+              item['result']?['recommendationId']?.toString().trim();
           return {
             ...item,
-            'token': item['token'] ?? item['hotelToken'] ?? item['result']?['token'],
-            'recommendationId': item['recommendationId'] ?? item['result']?['recommendationId'],
+            'token':
+                item['token'] ?? item['hotelToken'] ?? item['result']?['token'],
+            'recommendationId': (itemRecommendationId != null &&
+                    itemRecommendationId.isNotEmpty)
+                ? itemRecommendationId
+                : (nestedRecommendationId != null &&
+                        nestedRecommendationId.isNotEmpty)
+                    ? nestedRecommendationId
+                    : lastRecommendationId,
             // Preserve search context for booking
             'checkIn': data['checkIn'] ?? lastSearchCheckIn,
             'checkOut': data['checkOut'] ?? lastSearchCheckOut,
-            'rooms': item['rooms'] ?? [
-              {
-                'childAges': [],
-                'children': 0,
-                'adults': 2,
-              }
-            ],
+            'rooms': item['rooms'] ??
+                [
+                  {
+                    'childAges': [],
+                    'children': 0,
+                    'adults': 2,
+                  }
+                ],
           };
         }
         return item;
@@ -415,7 +431,8 @@ class _HomePageState extends State<HomePage> {
     if (month == null) return null;
 
     final date = DateTime(year, month, day);
-    if (date.year != year || date.month != month || date.day != day) return null;
+    if (date.year != year || date.month != month || date.day != day)
+      return null;
 
     final y = date.year.toString().padLeft(4, '0');
     final mm = date.month.toString().padLeft(2, '0');
@@ -431,7 +448,8 @@ class _HomePageState extends State<HomePage> {
     );
 
     return message.replaceAllMapped(naturalDateRegex, (m) {
-      final normalized = _normalizeNaturalDate(m.group(0)!, defaultYear: nowYear);
+      final normalized =
+          _normalizeNaturalDate(m.group(0)!, defaultYear: nowYear);
       return normalized ?? m.group(0)!;
     });
   }
@@ -488,8 +506,8 @@ class _HomePageState extends State<HomePage> {
     final params = _extractSearchParameters(userMessage);
 
     // If this looks like just a checkout date and we have previous context
-    if (_isDateFormat(userMessage.trim()) && 
-        lastSearchCity != null && 
+    if (_isDateFormat(userMessage.trim()) &&
+        lastSearchCity != null &&
         lastSearchCheckIn != null) {
       final checkOut = userMessage.trim();
       lastSearchCheckOut = checkOut;
@@ -501,7 +519,7 @@ class _HomePageState extends State<HomePage> {
     if (params['city'] != null && params['checkIn'] != null) {
       lastSearchCity = params['city'];
       lastSearchCheckIn = params['checkIn'];
-      
+
       // If we have checkout, it's complete
       if (params['checkOut'] != null) {
         lastSearchCheckOut = params['checkOut'];
@@ -544,7 +562,8 @@ class _HomePageState extends State<HomePage> {
     }
 
     final travelerCounts = _extractTravelerCounts(normalizedText);
-    if (_isBookingIntentForTravelerPrompt(normalizedText) && travelerCounts == null) {
+    if (_isBookingIntentForTravelerPrompt(normalizedText) &&
+        travelerCounts == null) {
       _pendingBookingQuery = normalizedText;
       _awaitingTravelerCounts = true;
       setState(() => messages.insert(0, ChatMessage(trimmed, fromUser: true)));
@@ -596,8 +615,7 @@ class _HomePageState extends State<HomePage> {
   Future<void> _selectCard(dynamic it) async {
     final name = it['name'] ?? 'Selected item';
     final price = it['ourprice'] ?? it['price'] ?? 'N/A';
-    final isLikelyHotel = it is Map &&
-        (it['starRating'] != null || it['heroImage'] != null || it['mainamenity'] != null);
+    final isLikelyHotel = _isHotelCard(it);
 
     final defaultRoomsConfig = [
       {
@@ -606,12 +624,14 @@ class _HomePageState extends State<HomePage> {
         'adults': 2,
       }
     ];
-    
+
     // Ensure hotel object has destinationId for booking
     if (it is Map && it['destinationId'] == null && lastDestinationId != null) {
       it['destinationId'] = lastDestinationId;
     }
-    if (it is Map && it['destinationCode'] == null && lastDestinationCode != null) {
+    if (it is Map &&
+        it['destinationCode'] == null &&
+        lastDestinationCode != null) {
       it['destinationCode'] = lastDestinationCode;
     }
 
@@ -619,19 +639,35 @@ class _HomePageState extends State<HomePage> {
     if (it is Map && it['token'] == null && lastToken != null) {
       it['token'] = lastToken;
     }
-    if (it is Map && it['recommendationId'] == null && lastRecommendationId != null) {
+    final itemRecommendationId =
+        it is Map ? it['recommendationId']?.toString().trim() : null;
+    final itemNestedRecommendationId = it is Map && it['result'] is Map
+        ? (it['result'] as Map)['recommendationId']?.toString().trim()
+        : null;
+    if (it is Map &&
+        (itemRecommendationId == null || itemRecommendationId.isEmpty) &&
+        lastRecommendationId != null) {
       it['recommendationId'] = lastRecommendationId;
+    } else if (it is Map &&
+        (itemRecommendationId == null || itemRecommendationId.isEmpty) &&
+        itemNestedRecommendationId != null &&
+        itemNestedRecommendationId.isNotEmpty) {
+      it['recommendationId'] = itemNestedRecommendationId;
     }
-    if (it is Map && (it['checkIn'] == null || it['checkIn'].toString().isEmpty) && lastSearchCheckIn != null) {
+    if (it is Map &&
+        (it['checkIn'] == null || it['checkIn'].toString().isEmpty) &&
+        lastSearchCheckIn != null) {
       it['checkIn'] = lastSearchCheckIn;
     }
-    if (it is Map && (it['checkOut'] == null || it['checkOut'].toString().isEmpty) && lastSearchCheckOut != null) {
+    if (it is Map &&
+        (it['checkOut'] == null || it['checkOut'].toString().isEmpty) &&
+        lastSearchCheckOut != null) {
       it['checkOut'] = lastSearchCheckOut;
     }
     if (it is Map && it['rooms'] == null) {
       it['rooms'] = defaultRoomsConfig;
     }
-    
+
     // Add user message
     setState(
       () => messages.insert(0, ChatMessage('$name — \$$price', fromUser: true)),
@@ -744,33 +780,53 @@ class _HomePageState extends State<HomePage> {
     return 0;
   }
 
-  Future<bool> _showFlightRevalidatedDialog(dynamic revalidate, dynamic selectedFlight) async {
+  Future<bool> _showFlightRevalidatedDialog(
+      dynamic revalidate, dynamic selectedFlight) async {
     final root = (revalidate is Map) ? revalidate : <String, dynamic>{};
-    final result = (root['result'] is Map) ? root['result'] as Map : <String, dynamic>{};
-    final pricing = (result['pricing'] is Map) ? result['pricing'] as Map : <String, dynamic>{};
-    final ptcInfo = (result['ptcInfo'] is List) ? result['ptcInfo'] as List : <dynamic>[];
-    final bookingRequired = (result['bookingRequired'] is List) ? result['bookingRequired'] as List : <dynamic>[];
+    final result =
+        (root['result'] is Map) ? root['result'] as Map : <String, dynamic>{};
+    final pricing = (result['pricing'] is Map)
+        ? result['pricing'] as Map
+        : <String, dynamic>{};
+    final ptcInfo =
+        (result['ptcInfo'] is List) ? result['ptcInfo'] as List : <dynamic>[];
+    final bookingRequired = (result['bookingRequired'] is List)
+        ? result['bookingRequired'] as List
+        : <dynamic>[];
 
     final totalFare = pricing['totalFare'] ?? result['coin'] ?? 'N/A';
     final taxes = pricing['taxes'] ?? 'N/A';
-    final ourPrice = pricing['showOurprice'] ?? pricing['ourprice'] ?? result['coin'] ?? 'N/A';
+    final ourPrice = pricing['showOurprice'] ??
+        pricing['ourprice'] ??
+        result['coin'] ??
+        'N/A';
 
     final firstPax = (ptcInfo.isNotEmpty && ptcInfo.first is Map)
         ? ptcInfo.first as Map
         : <String, dynamic>{};
-    final baggageInfo = (firstPax['baggageInfo'] is List) ? firstPax['baggageInfo'] as List : <dynamic>[];
-    final cabinBaggage = (firstPax['cabinBaggage'] is List) ? firstPax['cabinBaggage'] as List : <dynamic>[];
-    final penalties = (firstPax['penaltiesInfo'] is List) ? firstPax['penaltiesInfo'] as List : <dynamic>[];
+    final baggageInfo = (firstPax['baggageInfo'] is List)
+        ? firstPax['baggageInfo'] as List
+        : <dynamic>[];
+    final cabinBaggage = (firstPax['cabinBaggage'] is List)
+        ? firstPax['cabinBaggage'] as List
+        : <dynamic>[];
+    final penalties = (firstPax['penaltiesInfo'] is List)
+        ? firstPax['penaltiesInfo'] as List
+        : <dynamic>[];
 
-    final airline = (selectedFlight['airline'] ?? selectedFlight['name'] ?? 'Flight').toString();
-    final route = '${selectedFlight['departureCode'] ?? '---'} → ${selectedFlight['arrivalCode'] ?? '---'}';
+    final airline =
+        (selectedFlight['airline'] ?? selectedFlight['name'] ?? 'Flight')
+            .toString();
+    final route =
+        '${selectedFlight['departureCode'] ?? '---'} → ${selectedFlight['arrivalCode'] ?? '---'}';
 
     final confirmed = await showDialog<bool>(
       context: context,
       barrierDismissible: false,
       builder: (ctx) {
         return Dialog(
-          insetPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 24),
+          insetPadding:
+              const EdgeInsets.symmetric(horizontal: 16, vertical: 24),
           child: ConstrainedBox(
             constraints: const BoxConstraints(maxWidth: 760, maxHeight: 820),
             child: Column(
@@ -799,12 +855,17 @@ class _HomePageState extends State<HomePage> {
                           children: [
                             const Text(
                               'Fare Revalidated',
-                              style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 16),
+                              style: TextStyle(
+                                  color: Colors.white,
+                                  fontWeight: FontWeight.bold,
+                                  fontSize: 16),
                             ),
                             const SizedBox(height: 2),
                             Text(
                               '$airline • $route',
-                              style: TextStyle(color: Colors.white.withOpacity(0.9), fontSize: 12),
+                              style: TextStyle(
+                                  color: Colors.white.withOpacity(0.9),
+                                  fontSize: 12),
                             ),
                           ],
                         ),
@@ -834,11 +895,24 @@ class _HomePageState extends State<HomePage> {
                             children: [
                               Row(
                                 children: [
-                                  Expanded(child: _flightInfoChip('Final Fare', '\$$ourPrice', backgroundColor: Colors.green.shade50, textColor: Colors.green.shade800)),
+                                  Expanded(
+                                      child: _flightInfoChip(
+                                          'Final Fare', '\$$ourPrice',
+                                          backgroundColor: Colors.green.shade50,
+                                          textColor: Colors.green.shade800)),
                                   const SizedBox(width: 8),
-                                  Expanded(child: _flightInfoChip('Base/Total', '\$$totalFare', backgroundColor: Colors.grey.shade100)),
+                                  Expanded(
+                                      child: _flightInfoChip(
+                                          'Base/Total', '\$$totalFare',
+                                          backgroundColor:
+                                              Colors.grey.shade100)),
                                   const SizedBox(width: 8),
-                                  Expanded(child: _flightInfoChip('Taxes', '\$$taxes', backgroundColor: Colors.orange.shade50, textColor: Colors.orange.shade800)),
+                                  Expanded(
+                                      child: _flightInfoChip(
+                                          'Taxes', '\$$taxes',
+                                          backgroundColor:
+                                              Colors.orange.shade50,
+                                          textColor: Colors.orange.shade800)),
                                 ],
                               ),
                               const SizedBox(height: 10),
@@ -846,10 +920,22 @@ class _HomePageState extends State<HomePage> {
                                 spacing: 8,
                                 runSpacing: 8,
                                 children: [
-                                  _flightInfoChip('Fare Type', '${result['fairtype'] ?? 'N/A'}', backgroundColor: Colors.indigo.shade50, textColor: Colors.indigo.shade700),
-                                  _flightInfoChip('Refundable', '${result['isRefundable'] ?? 'N/A'}', backgroundColor: Colors.blue.shade50, textColor: Colors.blue.shade700),
-                                  _flightInfoChip('Price Changed', '${result['pricechange'] == true ? 'Yes' : 'No'}', backgroundColor: Colors.purple.shade50, textColor: Colors.purple.shade700),
-                                  _flightInfoChip('Itinerary Changed', '${result['iternarychange'] == true ? 'Yes' : 'No'}', backgroundColor: Colors.pink.shade50, textColor: Colors.pink.shade700),
+                                  _flightInfoChip('Fare Type',
+                                      '${result['fairtype'] ?? 'N/A'}',
+                                      backgroundColor: Colors.indigo.shade50,
+                                      textColor: Colors.indigo.shade700),
+                                  _flightInfoChip('Refundable',
+                                      '${result['isRefundable'] ?? 'N/A'}',
+                                      backgroundColor: Colors.blue.shade50,
+                                      textColor: Colors.blue.shade700),
+                                  _flightInfoChip('Price Changed',
+                                      '${result['pricechange'] == true ? 'Yes' : 'No'}',
+                                      backgroundColor: Colors.purple.shade50,
+                                      textColor: Colors.purple.shade700),
+                                  _flightInfoChip('Itinerary Changed',
+                                      '${result['iternarychange'] == true ? 'Yes' : 'No'}',
+                                      backgroundColor: Colors.pink.shade50,
+                                      textColor: Colors.pink.shade700),
                                 ],
                               ),
                             ],
@@ -869,10 +955,20 @@ class _HomePageState extends State<HomePage> {
                           child: Column(
                             crossAxisAlignment: CrossAxisAlignment.start,
                             children: [
-                              _detailRow('Checked baggage', baggageInfo.isEmpty ? 'N/A' : baggageInfo.join(' • ')),
-                              _detailRow('Cabin baggage', cabinBaggage.isEmpty ? 'N/A' : cabinBaggage.join(' • ')),
-                              _detailRow('Ticket type', '${result['ticketType'] ?? 'N/A'}'),
-                              _detailRow('Void time', '${result['voidtime'] ?? 'N/A'} mins'),
+                              _detailRow(
+                                  'Checked baggage',
+                                  baggageInfo.isEmpty
+                                      ? 'N/A'
+                                      : baggageInfo.join(' • ')),
+                              _detailRow(
+                                  'Cabin baggage',
+                                  cabinBaggage.isEmpty
+                                      ? 'N/A'
+                                      : cabinBaggage.join(' • ')),
+                              _detailRow('Ticket type',
+                                  '${result['ticketType'] ?? 'N/A'}'),
+                              _detailRow('Void time',
+                                  '${result['voidtime'] ?? 'N/A'} mins'),
                             ],
                           ),
                         ),
@@ -888,7 +984,8 @@ class _HomePageState extends State<HomePage> {
                             border: Border.all(color: Colors.grey.shade300),
                           ),
                           child: penalties.isEmpty
-                              ? Text('No penalties data available', style: TextStyle(color: Colors.grey[700]))
+                              ? Text('No penalties data available',
+                                  style: TextStyle(color: Colors.grey[700]))
                               : Column(
                                   children: penalties.map<Widget>((p) {
                                     return Padding(
@@ -898,19 +995,24 @@ class _HomePageState extends State<HomePage> {
                                         padding: const EdgeInsets.all(10),
                                         decoration: BoxDecoration(
                                           color: Colors.grey.shade50,
-                                          borderRadius: BorderRadius.circular(10),
+                                          borderRadius:
+                                              BorderRadius.circular(10),
                                         ),
                                         child: Row(
                                           children: [
                                             Expanded(
                                               child: Text(
                                                 '${p['penaltyType'] ?? 'Penalty'}',
-                                                style: const TextStyle(fontWeight: FontWeight.w600),
+                                                style: const TextStyle(
+                                                    fontWeight:
+                                                        FontWeight.w600),
                                               ),
                                             ),
                                             Text(
                                               '${p['allowed'] == true ? 'Allowed' : 'Not allowed'} • ${p['amount'] ?? 'N/A'} ${p['currencyCode'] ?? ''}',
-                                              style: TextStyle(color: Colors.grey[800], fontSize: 12),
+                                              style: TextStyle(
+                                                  color: Colors.grey[800],
+                                                  fontSize: 12),
                                             ),
                                           ],
                                         ),
@@ -975,7 +1077,8 @@ class _HomePageState extends State<HomePage> {
     final key0 = _extractFlightKey0(it);
 
     if (fareSourceCode.isEmpty || key0 <= 0) {
-      _bot('Unable to process this flight selection. Please select another option.');
+      _bot(
+          'Unable to process this flight selection. Please select another option.');
       return;
     }
 
@@ -987,14 +1090,17 @@ class _HomePageState extends State<HomePage> {
       );
 
       if (revalidate is! Map || revalidate['success'] != true) {
-        _bot('Flight revalidation failed. Please try a different flight option.');
+        _bot(
+            'Flight revalidation failed. Please try a different flight option.');
         return;
       }
 
       setState(() => loading = false);
-      final proceedToPayment = await _showFlightRevalidatedDialog(revalidate, it);
+      final proceedToPayment =
+          await _showFlightRevalidatedDialog(revalidate, it);
       if (!proceedToPayment) {
-        _bot('Flight selection cancelled. You can choose another option anytime.');
+        _bot(
+            'Flight selection cancelled. You can choose another option anytime.');
         return;
       }
       setState(() => loading = true);
@@ -1006,12 +1112,14 @@ class _HomePageState extends State<HomePage> {
         selectedFlight: it['rawFlight'] ?? it,
         origin: (it['departureCode'] ?? '').toString(),
         destination: (it['arrivalCode'] ?? '').toString(),
-        departureDate: _formatDateTime(it['departure']?.toString()).split(' ').first,
+        departureDate:
+            _formatDateTime(it['departure']?.toString()).split(' ').first,
       );
 
       final paymentUrl = _extractPaymentUrl(payment);
       if (paymentUrl == null) {
-        _bot('Flight revalidated, but payment URL is unavailable right now. Please try again in a moment.');
+        _bot(
+            'Flight revalidated, but payment URL is unavailable right now. Please try again in a moment.');
         return;
       }
 
@@ -1023,7 +1131,9 @@ class _HomePageState extends State<HomePage> {
 
       await launchUrl(
         url,
-        mode: kIsWeb ? LaunchMode.platformDefault : LaunchMode.externalApplication,
+        mode: kIsWeb
+            ? LaunchMode.platformDefault
+            : LaunchMode.externalApplication,
       );
 
       final bookingId = await bookingService.createBookingRecord(
@@ -1034,9 +1144,11 @@ class _HomePageState extends State<HomePage> {
             'Route: ${it['departureCode'] ?? ''} -> ${it['arrivalCode'] ?? ''}, Date: ${it['departure'] ?? ''}',
       );
 
-      _bot('Flight payment initiated. Would you like to continue with any other booking?');
+      _bot(
+          'Flight payment initiated. Would you like to continue with any other booking?');
     } catch (e) {
-      _bot('Unable to complete flight payment flow right now. Please try again.');
+      _bot(
+          'Unable to complete flight payment flow right now. Please try again.');
     } finally {
       setState(() => loading = false);
     }
@@ -1057,7 +1169,8 @@ class _HomePageState extends State<HomePage> {
             _bot('Would you like to book a flight or a hotel?');
           },
           onBookingConfirmed: (bookingId) {
-            _bot('Payment initiated. Would you like to continue with any other booking?');
+            _bot(
+                'Payment initiated. Would you like to continue with any other booking?');
           },
         );
       },
@@ -1085,10 +1198,114 @@ class _HomePageState extends State<HomePage> {
       return;
     }
 
-    // Send hotel search through chat
-    final message = 'Hotel in $city from $checkIn to $checkOut';
-    inputCtrl.text = message;
-    await _send(message);
+    setState(() => loading = true);
+
+    try {
+      final defaultRoomsConfig = [
+        {
+          'childAges': [],
+          'children': 0,
+          'adults': 2,
+        }
+      ];
+
+      // Resolve destination for search-hotels payload
+      final destResp =
+          await bookingService.searchHotelDestinations(query: city);
+      final destinations = (destResp is Map)
+          ? (destResp['result'] is List
+              ? destResp['result'] as List
+              : <dynamic>[])
+          : <dynamic>[];
+
+      if (destinations.isEmpty || destinations.first is! Map) {
+        _bot('No destination found for "$city". Please try another city.');
+        return;
+      }
+
+      final destination = destinations.first as Map;
+      final destinationId = destination['id']?.toString() ?? '';
+      final lat =
+          (destination['coordinates']?['lat'] as num?)?.toDouble() ?? 0.0;
+      final long =
+          (destination['coordinates']?['long'] as num?)?.toDouble() ?? 0.0;
+
+      if (destinationId.isEmpty) {
+        _bot('Destination lookup failed. Please try again.');
+        return;
+      }
+
+      // Step 1: call mcp/hotel/search-hotels
+      final hotelsResp = await bookingService.searchHotels(
+        destinationId: destinationId,
+        checkIn: checkIn,
+        checkOut: checkOut,
+        rooms: defaultRoomsConfig,
+        lat: lat,
+        long: long,
+      );
+
+      final resultMap = hotelsResp is Map
+          ? (hotelsResp['result'] is Map
+              ? hotelsResp['result'] as Map
+              : hotelsResp)
+          : <String, dynamic>{};
+      final hotels = resultMap['result'] is List
+          ? resultMap['result'] as List
+          : (resultMap['hotels'] is List
+              ? resultMap['hotels'] as List
+              : <dynamic>[]);
+
+      if (hotels.isEmpty) {
+        _bot('No hotels found for the selected dates.');
+        return;
+      }
+
+      final token = resultMap['token']?.toString();
+      final correlationId = resultMap['correlationId']?.toString();
+
+      if (token != null && token.isNotEmpty) {
+        lastToken = token;
+      }
+      lastDestinationId = destinationId;
+      lastSearchCity = city;
+      lastSearchCheckIn = checkIn;
+      lastSearchCheckOut = checkOut;
+
+      final normalizedCards = hotels.map((h) {
+        if (h is! Map) return h;
+        final recommendationId = h['recommendationId']?.toString().trim();
+        if (recommendationId != null && recommendationId.isNotEmpty) {
+          lastRecommendationId = recommendationId;
+        }
+        return {
+          ...h,
+          'token': h['token'] ?? h['hotelToken'] ?? token,
+          'recommendationId': recommendationId ?? lastRecommendationId,
+          'destinationId': h['destinationId'] ?? destinationId,
+          'checkIn': checkIn,
+          'checkOut': checkOut,
+          'rooms': h['rooms'] ?? defaultRoomsConfig,
+          if (correlationId != null && correlationId.isNotEmpty)
+            'correlationId': correlationId,
+        };
+      }).toList();
+
+      setState(() {
+        messages.insert(
+          0,
+          ChatMessage(
+            'I found ${normalizedCards.length} hotels for your trip. Select a hotel to continue.',
+            fromUser: false,
+            cards: normalizedCards,
+          ),
+        );
+      });
+    } catch (e) {
+      _bot('Hotel search failed: $e');
+    } finally {
+      setState(() => loading = false);
+    }
   }
 
   // --- UI BUILDING METHODS ---
@@ -1162,17 +1379,17 @@ class _HomePageState extends State<HomePage> {
         margin: const EdgeInsets.symmetric(vertical: 6),
         padding: const EdgeInsets.all(14),
         decoration: BoxDecoration(
-          gradient: m.fromUser 
-            ? LinearGradient(
-                colors: [Color(0xFF667eea), Color(0xFF764ba2)],
-                begin: Alignment.topLeft,
-                end: Alignment.bottomRight,
-              )
-            : LinearGradient(
-                colors: [Color(0xFFf5f5f5), Color(0xFFfafafa)],
-                begin: Alignment.topLeft,
-                end: Alignment.bottomRight,
-              ),
+          gradient: m.fromUser
+              ? LinearGradient(
+                  colors: [Color(0xFF667eea), Color(0xFF764ba2)],
+                  begin: Alignment.topLeft,
+                  end: Alignment.bottomRight,
+                )
+              : LinearGradient(
+                  colors: [Color(0xFFf5f5f5), Color(0xFFfafafa)],
+                  begin: Alignment.topLeft,
+                  end: Alignment.bottomRight,
+                ),
           borderRadius: BorderRadius.circular(16),
           boxShadow: [
             BoxShadow(
@@ -1192,7 +1409,8 @@ class _HomePageState extends State<HomePage> {
                 child: IconButton(
                   visualDensity: VisualDensity.compact,
                   padding: EdgeInsets.zero,
-                  constraints: const BoxConstraints(minWidth: 32, minHeight: 32),
+                  constraints:
+                      const BoxConstraints(minWidth: 32, minHeight: 32),
                   splashRadius: 18,
                   onPressed: () => _copyChatText(messageText),
                   icon: Icon(
@@ -1254,7 +1472,23 @@ class _HomePageState extends State<HomePage> {
 
   bool _isFlightCard(dynamic it) {
     return it is Map &&
-        (it['fareSourceCode'] != null || it['segments'] != null || it['departureCode'] != null);
+        (it['fareSourceCode'] != null ||
+            it['segments'] != null ||
+            it['departureCode'] != null);
+  }
+
+  bool _isHotelCard(dynamic it) {
+    if (it is! Map) return false;
+    if (_isFlightCard(it)) return false;
+
+    // Hotel cards can come in slightly different shapes depending on source.
+    return it['hotelId'] != null ||
+        it['id'] != null ||
+        it['token'] != null ||
+        it['recommendationId'] != null ||
+        it['starRating'] != null ||
+        it['heroImage'] != null ||
+        it['mainamenity'] != null;
   }
 
   String? _flightLogoUrl(dynamic it) {
@@ -1311,13 +1545,17 @@ class _HomePageState extends State<HomePage> {
     final logoUrl = _flightLogoProxyUrl(it);
     final segments = (it['segments'] is List) ? it['segments'] as List : [];
 
-    final firstSeg =
-        (segments.isNotEmpty && segments.first is Map) ? segments.first as Map : null;
-    final lastSeg =
-        (segments.isNotEmpty && segments.last is Map) ? segments.last as Map : null;
+    final firstSeg = (segments.isNotEmpty && segments.first is Map)
+        ? segments.first as Map
+        : null;
+    final lastSeg = (segments.isNotEmpty && segments.last is Map)
+        ? segments.last as Map
+        : null;
 
-    final depCode = (it['departureCode'] ?? firstSeg?['departure'] ?? '---').toString();
-    final arrCode = (it['arrivalCode'] ?? lastSeg?['arrival'] ?? '---').toString();
+    final depCode =
+        (it['departureCode'] ?? firstSeg?['departure'] ?? '---').toString();
+    final arrCode =
+        (it['arrivalCode'] ?? lastSeg?['arrival'] ?? '---').toString();
     final depIso = (it['departure'] ?? firstSeg?['departureTime'])?.toString();
     final arrIso = (it['arrival'] ?? lastSeg?['arrivalTime'])?.toString();
     final depTime = _formatTimeOnly(depIso);
@@ -1326,10 +1564,16 @@ class _HomePageState extends State<HomePage> {
     final arrDate = _formatDateTime(arrIso).split(' ').first;
     final duration = _formatDuration(depIso, arrIso);
     final stopCount = int.tryParse('${it['stops'] ?? 0}') ?? 0;
-    final stopLabel = stopCount == 0 ? 'Non-stop' : '$stopCount stop${stopCount > 1 ? 's' : ''}';
-    final airlineName = (it['airline'] ?? firstSeg?['airline'] ?? 'Flight').toString();
-    final flightCode = '${it['airlineCode'] ?? firstSeg?['flightCode'] ?? ''}${it['flightNumber'] ?? firstSeg?['flightNumber'] ?? ''}'.trim();
-    final fareFamily = (it['fareFamily'] ?? firstSeg?['fareFamily'] ?? 'Standard').toString();
+    final stopLabel = stopCount == 0
+        ? 'Non-stop'
+        : '$stopCount stop${stopCount > 1 ? 's' : ''}';
+    final airlineName =
+        (it['airline'] ?? firstSeg?['airline'] ?? 'Flight').toString();
+    final flightCode =
+        '${it['airlineCode'] ?? firstSeg?['flightCode'] ?? ''}${it['flightNumber'] ?? firstSeg?['flightNumber'] ?? ''}'
+            .trim();
+    final fareFamily =
+        (it['fareFamily'] ?? firstSeg?['fareFamily'] ?? 'Standard').toString();
 
     return Card(
       elevation: 3,
@@ -1348,7 +1592,8 @@ class _HomePageState extends State<HomePage> {
                     logoUrl,
                     width: 32,
                     height: 32,
-                    errorBuilder: (_, __, ___) => const Icon(Icons.flight, size: 24),
+                    errorBuilder: (_, __, ___) =>
+                        const Icon(Icons.flight, size: 24),
                   )
                 else
                   const Icon(Icons.flight, size: 24),
@@ -1359,7 +1604,8 @@ class _HomePageState extends State<HomePage> {
                     children: [
                       Text(
                         airlineName,
-                        style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 16),
+                        style: const TextStyle(
+                            fontWeight: FontWeight.bold, fontSize: 16),
                       ),
                       const SizedBox(height: 2),
                       Text(
@@ -1404,12 +1650,16 @@ class _HomePageState extends State<HomePage> {
                       crossAxisAlignment: CrossAxisAlignment.start,
                       children: [
                         Text(depTime,
-                            style: const TextStyle(fontSize: 20, fontWeight: FontWeight.bold)),
+                            style: const TextStyle(
+                                fontSize: 20, fontWeight: FontWeight.bold)),
                         const SizedBox(height: 2),
                         Text(depCode,
-                            style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w700)),
+                            style: const TextStyle(
+                                fontSize: 13, fontWeight: FontWeight.w700)),
                         const SizedBox(height: 2),
-                        Text(depDate, style: TextStyle(fontSize: 11, color: Colors.grey[700])),
+                        Text(depDate,
+                            style: TextStyle(
+                                fontSize: 11, color: Colors.grey[700])),
                       ],
                     ),
                   ),
@@ -1432,8 +1682,10 @@ class _HomePageState extends State<HomePage> {
                               ),
                             ),
                             Padding(
-                              padding: const EdgeInsets.symmetric(horizontal: 4),
-                              child: Icon(Icons.flight, size: 16, color: Colors.indigo.shade400),
+                              padding:
+                                  const EdgeInsets.symmetric(horizontal: 4),
+                              child: Icon(Icons.flight,
+                                  size: 16, color: Colors.indigo.shade400),
                             ),
                             Expanded(
                               child: Container(
@@ -1445,7 +1697,8 @@ class _HomePageState extends State<HomePage> {
                         ),
                         const SizedBox(height: 4),
                         Text(stopLabel,
-                            style: TextStyle(color: Colors.grey[700], fontSize: 11)),
+                            style: TextStyle(
+                                color: Colors.grey[700], fontSize: 11)),
                       ],
                     ),
                   ),
@@ -1454,12 +1707,16 @@ class _HomePageState extends State<HomePage> {
                       crossAxisAlignment: CrossAxisAlignment.end,
                       children: [
                         Text(arrTime,
-                            style: const TextStyle(fontSize: 20, fontWeight: FontWeight.bold)),
+                            style: const TextStyle(
+                                fontSize: 20, fontWeight: FontWeight.bold)),
                         const SizedBox(height: 2),
                         Text(arrCode,
-                            style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w700)),
+                            style: const TextStyle(
+                                fontSize: 13, fontWeight: FontWeight.w700)),
                         const SizedBox(height: 2),
-                        Text(arrDate, style: TextStyle(fontSize: 11, color: Colors.grey[700])),
+                        Text(arrDate,
+                            style: TextStyle(
+                                fontSize: 11, color: Colors.grey[700])),
                       ],
                     ),
                   ),
@@ -1471,24 +1728,36 @@ class _HomePageState extends State<HomePage> {
               spacing: 8,
               runSpacing: 8,
               children: [
-                _flightInfoChip('Fare', fareFamily, backgroundColor: Colors.indigo.shade50, textColor: Colors.indigo.shade700),
-                _flightInfoChip('Ticketing', '${it['ticketingTime'] ?? 'N/A'} mins', backgroundColor: Colors.orange.shade50, textColor: Colors.orange.shade800),
-                _flightInfoChip('Stops', '$stopCount', backgroundColor: Colors.grey.shade100),
+                _flightInfoChip('Fare', fareFamily,
+                    backgroundColor: Colors.indigo.shade50,
+                    textColor: Colors.indigo.shade700),
+                _flightInfoChip(
+                    'Ticketing', '${it['ticketingTime'] ?? 'N/A'} mins',
+                    backgroundColor: Colors.orange.shade50,
+                    textColor: Colors.orange.shade800),
+                _flightInfoChip('Stops', '$stopCount',
+                    backgroundColor: Colors.grey.shade100),
               ],
             ),
-            if (it['baseFare'] != null || it['taxes'] != null || it['totalFare'] != null)
+            if (it['baseFare'] != null ||
+                it['taxes'] != null ||
+                it['totalFare'] != null)
               Padding(
                 padding: const EdgeInsets.only(top: 10),
                 child: Container(
                   width: double.infinity,
-                  padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
+                  padding:
+                      const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
                   decoration: BoxDecoration(
                     color: Colors.grey.shade50,
                     borderRadius: BorderRadius.circular(10),
                   ),
                   child: Text(
                     'Base: ${it['baseFare'] ?? 'N/A'}   Taxes: ${it['taxes'] ?? 'N/A'}   Total: ${it['totalFare'] ?? 'N/A'}',
-                    style: TextStyle(color: Colors.grey[700], fontSize: 12, fontWeight: FontWeight.w600),
+                    style: TextStyle(
+                        color: Colors.grey[700],
+                        fontSize: 12,
+                        fontWeight: FontWeight.w600),
                   ),
                 ),
               ),
@@ -1514,7 +1783,8 @@ class _HomePageState extends State<HomePage> {
   }
 
   Widget _detailRow(String label, dynamic value) {
-    final txt = (value == null || value.toString().isEmpty) ? 'N/A' : value.toString();
+    final txt =
+        (value == null || value.toString().isEmpty) ? 'N/A' : value.toString();
     return Padding(
       padding: const EdgeInsets.symmetric(vertical: 3),
       child: Row(
@@ -1538,7 +1808,8 @@ class _HomePageState extends State<HomePage> {
     );
   }
 
-  Widget _flightInfoChip(String label, String value, {Color? backgroundColor, Color? textColor}) {
+  Widget _flightInfoChip(String label, String value,
+      {Color? backgroundColor, Color? textColor}) {
     return Container(
       padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
       decoration: BoxDecoration(
@@ -1646,7 +1917,8 @@ class _HomePageState extends State<HomePage> {
                     ),
                     if ((seg['remainingSeats'] ?? '').toString() != 'N/A')
                       Container(
-                        padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                        padding: const EdgeInsets.symmetric(
+                            horizontal: 8, vertical: 4),
                         decoration: BoxDecoration(
                           color: Colors.green.shade50,
                           borderRadius: BorderRadius.circular(999),
@@ -1671,22 +1943,27 @@ class _HomePageState extends State<HomePage> {
                         crossAxisAlignment: CrossAxisAlignment.start,
                         children: [
                           Text(
-                            seg['departurelocation']?.toString() ?? seg['departure']?.toString() ?? 'Departure',
+                            seg['departurelocation']?.toString() ??
+                                seg['departure']?.toString() ??
+                                'Departure',
                             style: const TextStyle(fontWeight: FontWeight.w600),
                           ),
                           const SizedBox(height: 2),
                           Text(
                             '${seg['departureairport'] ?? seg['departairport'] ?? ''}\n${_formatDateTime(seg['departureTime']?.toString())}',
-                            style: TextStyle(fontSize: 12, color: Colors.grey[700]),
+                            style: TextStyle(
+                                fontSize: 12, color: Colors.grey[700]),
                           ),
                         ],
                       ),
                     ),
                     Container(
-                      margin: const EdgeInsets.symmetric(horizontal: 8, vertical: 10),
+                      margin: const EdgeInsets.symmetric(
+                          horizontal: 8, vertical: 10),
                       child: Column(
                         children: [
-                          Icon(Icons.flight_takeoff, size: 18, color: Colors.indigo.shade300),
+                          Icon(Icons.flight_takeoff,
+                              size: 18, color: Colors.indigo.shade300),
                           const SizedBox(height: 4),
                           Container(
                             width: 64,
@@ -1701,14 +1978,17 @@ class _HomePageState extends State<HomePage> {
                         crossAxisAlignment: CrossAxisAlignment.end,
                         children: [
                           Text(
-                            seg['arrivallocation']?.toString() ?? seg['arrival']?.toString() ?? 'Arrival',
+                            seg['arrivallocation']?.toString() ??
+                                seg['arrival']?.toString() ??
+                                'Arrival',
                             style: const TextStyle(fontWeight: FontWeight.w600),
                             textAlign: TextAlign.right,
                           ),
                           const SizedBox(height: 2),
                           Text(
                             '${seg['arrivalairport'] ?? seg['arrivalairport'] ?? ''}\n${_formatDateTime(seg['arrivalTime']?.toString())}',
-                            style: TextStyle(fontSize: 12, color: Colors.grey[700]),
+                            style: TextStyle(
+                                fontSize: 12, color: Colors.grey[700]),
                             textAlign: TextAlign.right,
                           ),
                         ],
@@ -1721,9 +2001,13 @@ class _HomePageState extends State<HomePage> {
                   spacing: 8,
                   runSpacing: 8,
                   children: [
-                    _flightInfoChip('Cabin', seg['cabin']?.toString() ?? 'N/A', backgroundColor: Colors.grey.shade50),
-                    _flightInfoChip('Duration', '${seg['triptime'] ?? 'N/A'} mins', backgroundColor: Colors.grey.shade50),
-                    _flightInfoChip('Leg', '${seg['legindicator'] ?? 'N/A'}', backgroundColor: Colors.grey.shade50),
+                    _flightInfoChip('Cabin', seg['cabin']?.toString() ?? 'N/A',
+                        backgroundColor: Colors.grey.shade50),
+                    _flightInfoChip(
+                        'Duration', '${seg['triptime'] ?? 'N/A'} mins',
+                        backgroundColor: Colors.grey.shade50),
+                    _flightInfoChip('Leg', '${seg['legindicator'] ?? 'N/A'}',
+                        backgroundColor: Colors.grey.shade50),
                   ],
                 ),
               ],
@@ -1736,16 +2020,21 @@ class _HomePageState extends State<HomePage> {
 
   void _showFlightDetails(dynamic it) {
     final logoUrl = _flightLogoProxyUrl(it);
-    final segments = (it['segments'] is List) ? it['segments'] as List : <dynamic>[];
-    final taxBreakUp = (it['taxBreakUp'] is List) ? it['taxBreakUp'] as List : <dynamic>[];
-    final penalties = (it['penaltyDetails'] is List) ? it['penaltyDetails'] as List : <dynamic>[];
+    final segments =
+        (it['segments'] is List) ? it['segments'] as List : <dynamic>[];
+    final taxBreakUp =
+        (it['taxBreakUp'] is List) ? it['taxBreakUp'] as List : <dynamic>[];
+    final penalties = (it['penaltyDetails'] is List)
+        ? it['penaltyDetails'] as List
+        : <dynamic>[];
     final rawFlight = it['rawFlight'] ?? it;
 
     showDialog(
       context: context,
       builder: (ctx) {
         return Dialog(
-          insetPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 24),
+          insetPadding:
+              const EdgeInsets.symmetric(horizontal: 16, vertical: 24),
           child: ConstrainedBox(
             constraints: const BoxConstraints(maxWidth: 820, maxHeight: 860),
             child: Column(
@@ -1780,7 +2069,9 @@ class _HomePageState extends State<HomePage> {
                                   logoUrl,
                                   width: 26,
                                   height: 26,
-                                  errorBuilder: (_, __, ___) => const Icon(Icons.flight, color: Colors.white),
+                                  errorBuilder: (_, __, ___) => const Icon(
+                                      Icons.flight,
+                                      color: Colors.white),
                                 )
                               : const Icon(Icons.flight, color: Colors.white),
                         ),
@@ -1801,7 +2092,9 @@ class _HomePageState extends State<HomePage> {
                             const SizedBox(height: 4),
                             Text(
                               '${it['departureCode'] ?? ''} → ${it['arrivalCode'] ?? ''} • ${it['fareFamily'] ?? 'Fare not specified'}',
-                              style: TextStyle(color: Colors.white.withOpacity(0.9), fontSize: 12),
+                              style: TextStyle(
+                                  color: Colors.white.withOpacity(0.9),
+                                  fontSize: 12),
                             ),
                           ],
                         ),
@@ -1835,11 +2128,14 @@ class _HomePageState extends State<HomePage> {
                                   children: [
                                     Expanded(
                                       child: Column(
-                                        crossAxisAlignment: CrossAxisAlignment.start,
+                                        crossAxisAlignment:
+                                            CrossAxisAlignment.start,
                                         children: [
                                           Text(
                                             it['name'] ?? 'Flight Option',
-                                            style: const TextStyle(fontSize: 16, fontWeight: FontWeight.bold),
+                                            style: const TextStyle(
+                                                fontSize: 16,
+                                                fontWeight: FontWeight.bold),
                                           ),
                                           const SizedBox(height: 4),
                                           // Text(
@@ -1850,15 +2146,21 @@ class _HomePageState extends State<HomePage> {
                                       ),
                                     ),
                                     Column(
-                                      crossAxisAlignment: CrossAxisAlignment.end,
+                                      crossAxisAlignment:
+                                          CrossAxisAlignment.end,
                                       children: [
                                         Text(
                                           '\$${it['price'] ?? it['showOurprice'] ?? it['totalFare'] ?? 'N/A'}',
-                                          style: const TextStyle(fontSize: 22, fontWeight: FontWeight.bold, color: Colors.green),
+                                          style: const TextStyle(
+                                              fontSize: 22,
+                                              fontWeight: FontWeight.bold,
+                                              color: Colors.green),
                                         ),
                                         Text(
                                           'per traveler',
-                                          style: TextStyle(fontSize: 11, color: Colors.grey[600]),
+                                          style: TextStyle(
+                                              fontSize: 11,
+                                              color: Colors.grey[600]),
                                         ),
                                       ],
                                     ),
@@ -1869,10 +2171,22 @@ class _HomePageState extends State<HomePage> {
                                   spacing: 10,
                                   runSpacing: 10,
                                   children: [
-                                    _flightInfoChip('Stops', '${it['stops'] ?? 0}', backgroundColor: Colors.indigo.shade50, textColor: Colors.indigo.shade700),
-                                    _flightInfoChip('Ticketing', '${it['ticketingTime'] ?? 'N/A'} mins', backgroundColor: Colors.orange.shade50, textColor: Colors.orange.shade800),
-                                    _flightInfoChip('Exchange', '${it['exchangeTime'] ?? 'N/A'}', backgroundColor: Colors.blue.shade50, textColor: Colors.blue.shade800),
-                                    _flightInfoChip('Void', '${it['voidTime'] ?? 'N/A'}', backgroundColor: Colors.purple.shade50, textColor: Colors.purple.shade800),
+                                    _flightInfoChip(
+                                        'Stops', '${it['stops'] ?? 0}',
+                                        backgroundColor: Colors.indigo.shade50,
+                                        textColor: Colors.indigo.shade700),
+                                    _flightInfoChip('Ticketing',
+                                        '${it['ticketingTime'] ?? 'N/A'} mins',
+                                        backgroundColor: Colors.orange.shade50,
+                                        textColor: Colors.orange.shade800),
+                                    _flightInfoChip('Exchange',
+                                        '${it['exchangeTime'] ?? 'N/A'}',
+                                        backgroundColor: Colors.blue.shade50,
+                                        textColor: Colors.blue.shade800),
+                                    _flightInfoChip(
+                                        'Void', '${it['voidTime'] ?? 'N/A'}',
+                                        backgroundColor: Colors.purple.shade50,
+                                        textColor: Colors.purple.shade800),
                                   ],
                                 ),
                               ],
@@ -1889,15 +2203,23 @@ class _HomePageState extends State<HomePage> {
                             child: Column(
                               crossAxisAlignment: CrossAxisAlignment.start,
                               children: [
-                                _sectionTitle('Flight itinerary', subtitle: 'Detailed segment-by-segment journey view'),
+                                _sectionTitle('Flight itinerary',
+                                    subtitle:
+                                        'Detailed segment-by-segment journey view'),
                                 const SizedBox(height: 14),
                                 if (segments.isEmpty)
-                                  Text('No segment details available', style: TextStyle(color: Colors.grey[700]))
+                                  Text('No segment details available',
+                                      style: TextStyle(color: Colors.grey[700]))
                                 else
-                                  ...segments.asMap().entries.map<Widget>((entry) {
+                                  ...segments
+                                      .asMap()
+                                      .entries
+                                      .map<Widget>((entry) {
                                     final index = entry.key;
-                                    final seg = Map<String, dynamic>.from(entry.value as Map);
-                                    return _buildSegmentTile(seg, isLast: index == segments.length - 1);
+                                    final seg = Map<String, dynamic>.from(
+                                        entry.value as Map);
+                                    return _buildSegmentTile(seg,
+                                        isLast: index == segments.length - 1);
                                   }).toList(),
                               ],
                             ),
@@ -1915,8 +2237,12 @@ class _HomePageState extends State<HomePage> {
                               children: [
                                 _sectionTitle('Fare & pricing'),
                                 const SizedBox(height: 10),
-                                _detailRow('Departure airport', it['departureLocation'] ?? it['departureCode']),
-                                _detailRow('Arrival airport', it['arrivalLocation'] ?? it['arrivalCode']),
+                                _detailRow(
+                                    'Departure airport',
+                                    it['departureLocation'] ??
+                                        it['departureCode']),
+                                _detailRow('Arrival airport',
+                                    it['arrivalLocation'] ?? it['arrivalCode']),
                                 _detailRow('Displayed price', it['price']),
                                 _detailRow('Base fare', it['baseFare']),
                                 _detailRow('Taxes', it['taxes']),
@@ -1956,7 +2282,8 @@ class _HomePageState extends State<HomePage> {
                                 _sectionTitle('Rules & penalties'),
                                 const SizedBox(height: 10),
                                 if (penalties.isEmpty)
-                                  Text('No penalty details available', style: TextStyle(color: Colors.grey[700]))
+                                  Text('No penalty details available',
+                                      style: TextStyle(color: Colors.grey[700]))
                                 else
                                   ...penalties.map<Widget>((p) {
                                     return Container(
@@ -1965,18 +2292,43 @@ class _HomePageState extends State<HomePage> {
                                       decoration: BoxDecoration(
                                         color: Colors.grey.shade50,
                                         borderRadius: BorderRadius.circular(12),
-                                        border: Border.all(color: Colors.grey.shade300),
+                                        border: Border.all(
+                                            color: Colors.grey.shade300),
                                       ),
                                       child: Wrap(
                                         spacing: 10,
                                         runSpacing: 10,
                                         children: [
-                                          _flightInfoChip('Pax', p['paxType']?.toString() ?? 'N/A', backgroundColor: Colors.white),
-                                          _flightInfoChip('Refund allowed', p['refundAllowed']?.toString() ?? 'N/A', backgroundColor: Colors.white),
-                                          _flightInfoChip('Refund penalty', p['refundPenaltyAmount']?.toString() ?? 'N/A', backgroundColor: Colors.white),
-                                          _flightInfoChip('Change allowed', p['changeAllowed']?.toString() ?? 'N/A', backgroundColor: Colors.white),
-                                          _flightInfoChip('Change penalty', p['changePenaltyAmount']?.toString() ?? 'N/A', backgroundColor: Colors.white),
-                                          _flightInfoChip('Currency', p['currency']?.toString() ?? 'N/A', backgroundColor: Colors.white),
+                                          _flightInfoChip('Pax',
+                                              p['paxType']?.toString() ?? 'N/A',
+                                              backgroundColor: Colors.white),
+                                          _flightInfoChip(
+                                              'Refund allowed',
+                                              p['refundAllowed']?.toString() ??
+                                                  'N/A',
+                                              backgroundColor: Colors.white),
+                                          _flightInfoChip(
+                                              'Refund penalty',
+                                              p['refundPenaltyAmount']
+                                                      ?.toString() ??
+                                                  'N/A',
+                                              backgroundColor: Colors.white),
+                                          _flightInfoChip(
+                                              'Change allowed',
+                                              p['changeAllowed']?.toString() ??
+                                                  'N/A',
+                                              backgroundColor: Colors.white),
+                                          _flightInfoChip(
+                                              'Change penalty',
+                                              p['changePenaltyAmount']
+                                                      ?.toString() ??
+                                                  'N/A',
+                                              backgroundColor: Colors.white),
+                                          _flightInfoChip(
+                                              'Currency',
+                                              p['currency']?.toString() ??
+                                                  'N/A',
+                                              backgroundColor: Colors.white),
                                         ],
                                       ),
                                     );
@@ -2012,7 +2364,8 @@ class _HomePageState extends State<HomePage> {
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            if (it['heroImage'] != null && it['heroImage'].toString().isNotEmpty)
+            if (it['heroImage'] != null &&
+                it['heroImage'].toString().isNotEmpty)
               ClipRRect(
                 borderRadius: BorderRadius.circular(8),
                 child: Image.network(
@@ -2023,7 +2376,8 @@ class _HomePageState extends State<HomePage> {
                   errorBuilder: (context, error, stackTrace) => Container(
                     height: 150,
                     color: Colors.grey[300],
-                    child: const Icon(Icons.hotel, size: 50, color: Colors.grey),
+                    child:
+                        const Icon(Icons.hotel, size: 50, color: Colors.grey),
                   ),
                 ),
               ),
@@ -2032,13 +2386,15 @@ class _HomePageState extends State<HomePage> {
               children: [
                 Expanded(
                   child: Text(it['name'] ?? 'Hotel Option',
-                      style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 16)),
+                      style: const TextStyle(
+                          fontWeight: FontWeight.bold, fontSize: 16)),
                 ),
                 if (starCount > 0)
                   Row(
                     children: List.generate(
                       starCount,
-                      (index) => const Icon(Icons.star, color: Colors.amber, size: 16),
+                      (index) =>
+                          const Icon(Icons.star, color: Colors.amber, size: 16),
                     ),
                   ),
               ],
@@ -2049,14 +2405,17 @@ class _HomePageState extends State<HomePage> {
                 Text(
                   '\$${it['ourprice'] ?? 'N/A'}',
                   style: const TextStyle(
-                      fontSize: 18, fontWeight: FontWeight.bold, color: Colors.green),
+                      fontSize: 18,
+                      fontWeight: FontWeight.bold,
+                      color: Colors.green),
                 ),
                 if (it['saving'] != null && it['saving'] > 0)
                   Padding(
                     padding: const EdgeInsets.only(left: 8),
                     child: Text(
                       'Save \$${it['saving']}',
-                      style: const TextStyle(color: Colors.red, fontWeight: FontWeight.w500),
+                      style: const TextStyle(
+                          color: Colors.red, fontWeight: FontWeight.w500),
                     ),
                   ),
               ],
@@ -2090,10 +2449,12 @@ class _HomePageState extends State<HomePage> {
                 runSpacing: 4,
                 children: (it['mainamenity'] as List)
                     .map<Widget>((amenity) => Chip(
-                          label: Text(amenity, style: const TextStyle(fontSize: 10)),
+                          label: Text(amenity,
+                              style: const TextStyle(fontSize: 10)),
                           backgroundColor: Colors.blue.shade50,
                           padding: EdgeInsets.zero,
-                          materialTapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                          materialTapTargetSize:
+                              MaterialTapTargetSize.shrinkWrap,
                         ))
                     .toList(),
               ),
@@ -2141,7 +2502,8 @@ class _HomePageState extends State<HomePage> {
           children: [
             Expanded(
               child: Padding(
-                padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+                padding:
+                    const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
                 child: TextField(
                   controller: inputCtrl,
                   onSubmitted: _send,
@@ -2156,7 +2518,8 @@ class _HomePageState extends State<HomePage> {
                       borderRadius: BorderRadius.circular(24),
                       borderSide: BorderSide.none,
                     ),
-                    contentPadding: EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+                    contentPadding:
+                        EdgeInsets.symmetric(horizontal: 16, vertical: 12),
                   ),
                 ),
               ),
@@ -2165,31 +2528,32 @@ class _HomePageState extends State<HomePage> {
               padding: const EdgeInsets.only(right: 12),
               child: loading
                   ? Container(
-                    width: 48,
-                    height: 48,
-                    decoration: BoxDecoration(
-                      gradient: LinearGradient(
-                        colors: [Color(0xFF667eea), Color(0xFF764ba2)],
+                      width: 48,
+                      height: 48,
+                      decoration: BoxDecoration(
+                        gradient: LinearGradient(
+                          colors: [Color(0xFF667eea), Color(0xFF764ba2)],
+                        ),
+                        shape: BoxShape.circle,
                       ),
-                      shape: BoxShape.circle,
-                    ),
-                    child: Center(
-                      child: SizedBox(
-                        width: 20,
-                        height: 20,
-                        child: CircularProgressIndicator(
-                          strokeWidth: 2,
-                          valueColor: AlwaysStoppedAnimation<Color>(Colors.white),
+                      child: Center(
+                        child: SizedBox(
+                          width: 20,
+                          height: 20,
+                          child: CircularProgressIndicator(
+                            strokeWidth: 2,
+                            valueColor:
+                                AlwaysStoppedAnimation<Color>(Colors.white),
+                          ),
                         ),
                       ),
-                    ),
-                  )
+                    )
                   : FloatingActionButton(
-                    onPressed: () => _send(inputCtrl.text),
-                    mini: true,
-                    backgroundColor: Color(0xFF667eea),
-                    child: Icon(Icons.send, color: Colors.white),
-                  ),
+                      onPressed: () => _send(inputCtrl.text),
+                      mini: true,
+                      backgroundColor: Color(0xFF667eea),
+                      child: Icon(Icons.send, color: Colors.white),
+                    ),
             )
           ],
         ),
@@ -2290,29 +2654,31 @@ class _HomePageState extends State<HomePage> {
               '')
           : '';
 
-        final today = DateTime.now();
-        final tomorrow = DateTime.now().add(const Duration(days: 1));
-        final checkIn = hotel['checkIn']?.toString().isNotEmpty == true
+      final today = DateTime.now();
+      final tomorrow = DateTime.now().add(const Duration(days: 1));
+      final checkIn = hotel['checkIn']?.toString().isNotEmpty == true
           ? hotel['checkIn'].toString()
           : '${today.year}-${today.month.toString().padLeft(2, '0')}-${today.day.toString().padLeft(2, '0')}';
-        final checkOut = hotel['checkOut']?.toString().isNotEmpty == true
+      final checkOut = hotel['checkOut']?.toString().isNotEmpty == true
           ? hotel['checkOut'].toString()
           : '${tomorrow.year}-${tomorrow.month.toString().padLeft(2, '0')}-${tomorrow.day.toString().padLeft(2, '0')}';
-        final rooms = (hotel['rooms'] is List && (hotel['rooms'] as List).isNotEmpty)
-          ? hotel['rooms']
-          : [
-            {
-            'childAges': [],
-            'children': 0,
-            'adults': 2,
-            }
-          ];
+      final rooms =
+          (hotel['rooms'] is List && (hotel['rooms'] as List).isNotEmpty)
+              ? hotel['rooms']
+              : [
+                  {
+                    'childAges': [],
+                    'children': 0,
+                    'adults': 2,
+                  }
+                ];
 
-      // Fetch room rates from backend proxy using the token
+      // Fetch hotel details and rates from backend proxy using the token
       dynamic rates;
+      final correlationId = hotel['correlationId']?.toString();
       if (token is String && token.isNotEmpty) {
         final ratesResponse = await http.post(
-          Uri.parse('$base/mcp/hotel/get-rooms-and-rates'),
+          Uri.parse('$base/mcp/hotel/get-hotel-details-and-rates'),
           headers: {'Content-Type': 'application/json'},
           body: json.encode({
             'token': token,
@@ -2320,14 +2686,17 @@ class _HomePageState extends State<HomePage> {
             'checkIn': checkIn,
             'checkOut': checkOut,
             'rooms': rooms,
+            if (correlationId != null && correlationId.isNotEmpty)
+              'correlationId': correlationId,
           }),
         );
 
         debugPrint(
-            'Hotel rooms/rates response status: ${ratesResponse.statusCode}');
-        debugPrint('Hotel rooms/rates response body: ${ratesResponse.body}');
+            'Hotel details/rates response status: ${ratesResponse.statusCode}');
+        debugPrint('Hotel details/rates response body: ${ratesResponse.body}');
 
-        if (ratesResponse.statusCode == 200 || ratesResponse.statusCode == 201) {
+        if (ratesResponse.statusCode == 200 ||
+            ratesResponse.statusCode == 201) {
           rates = json.decode(ratesResponse.body);
         } else {
           debugPrint('Room rates load failed; showing details without rates.');
@@ -2351,11 +2720,17 @@ class _HomePageState extends State<HomePage> {
             ? details['result']
             : details)
         : {};
-    final List<dynamic> roomsData = (rates is Map)
-        ? (rates['result']?['rooms'] is List
-            ? rates['result']['rooms']
-            : (rates['rooms'] is List ? rates['rooms'] : []))
-        : [];
+    List<dynamic> roomsData = [];
+    if (rates is Map) {
+      if (rates['result']?['rooms'] is List) {
+        roomsData = rates['result']['rooms'] as List<dynamic>;
+      } else if (rates['result']?['content']?['rooms'] is Map) {
+        roomsData =
+            (rates['result']['content']['rooms'] as Map).values.toList();
+      } else if (rates['rooms'] is List) {
+        roomsData = rates['rooms'] as List<dynamic>;
+      }
+    }
     final List<dynamic> images =
         hotelData['images'] is List ? hotelData['images'] : [];
 

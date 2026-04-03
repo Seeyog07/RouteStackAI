@@ -39,6 +39,7 @@ let BookingsController = class BookingsController {
         return res.body;
     }
     async proxySearchHotels(body) {
+        console.log('[proxySearchHotels] request received');
         const res = await this.service.searchHotels(body);
         return res.body;
     }
@@ -47,7 +48,12 @@ let BookingsController = class BookingsController {
         return res.body;
     }
     async proxyGetRoomsAndRates(body) {
+        console.log('[proxyGetRoomsAndRates] request received');
         const res = await this.service.getRoomsAndRates(body.token, body.hotelId, body.checkIn, body.checkOut, body.rooms);
+        return res.body;
+    }
+    async proxyGetHotelDetailsAndRates(body) {
+        const res = await this.service.getHotelDetailsAndRates(body);
         return res.body;
     }
     async proxyGetPaymentUrl(body) {
@@ -55,8 +61,7 @@ let BookingsController = class BookingsController {
         return res.body;
     }
     async proxyRevalidateHotel(body) {
-        const res = await this.service.revalidateHotel(body.token, body.recommendationId, body.hotelId);
-        return res.body;
+        return await this.service.revalidateHotel(body.token, body.recommendationId, body.hotelId);
     }
     async proxyRevalidateFlight(body) {
         return await this.service.revalidateFlight(body.fareSourceCode, Number(body.key_0));
@@ -147,6 +152,13 @@ __decorate([
     __metadata("design:paramtypes", [Object]),
     __metadata("design:returntype", Promise)
 ], BookingsController.prototype, "proxyGetRoomsAndRates", null);
+__decorate([
+    (0, common_1.Post)('mcp/hotel/get-hotel-details-and-rates'),
+    __param(0, (0, common_1.Body)()),
+    __metadata("design:type", Function),
+    __metadata("design:paramtypes", [Object]),
+    __metadata("design:returntype", Promise)
+], BookingsController.prototype, "proxyGetHotelDetailsAndRates", null);
 __decorate([
     (0, common_1.Post)('mcp/hotel/get-payment-url'),
     __param(0, (0, common_1.Body)()),

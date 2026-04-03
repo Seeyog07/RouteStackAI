@@ -253,6 +253,28 @@ export class BookingsService {
     return await this.mcpRequest('/mcp/hotel/get-hotel-details', { hotelId });
   }
 
+  async getHotelDetailsAndRates(params: {
+    hotelId: string;
+    token: string;
+    checkIn: string;
+    checkOut: string;
+    rooms: any[];
+    correlationId?: string;
+  }) {
+    const bodyData: any = {
+      hotelId: params.hotelId,
+      token: params.token,
+      checkIn: params.checkIn,
+      checkOut: params.checkOut,
+      rooms: params.rooms,
+    };
+    if (params.correlationId) {
+      bodyData.correlationId = params.correlationId;
+    }
+
+    return await this.mcpRequest('/mcp/hotel/get-hotel-details-and-rates', bodyData);
+  }
+
   async getRoomsAndRates(token: string, hotelId: string, checkIn?: string, checkOut?: string, rooms?: any[]) {
     // If no token, return empty result gracefully to avoid auth rate limiting
     if (!token || token.trim() === '') {
