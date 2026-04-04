@@ -158,15 +158,10 @@ class _BookingConfirmationDialogState extends State<BookingConfirmationDialog> {
     String checkIn = widget.hotel['checkIn']?.toString() ?? '';
     String checkOut = widget.hotel['checkOut']?.toString() ?? '';
 
-    if (checkIn.isEmpty) {
-      final today = DateTime.now();
-      checkIn =
-          '${today.year}-${today.month.toString().padLeft(2, '0')}-${today.day.toString().padLeft(2, '0')}';
-    }
-    if (checkOut.isEmpty) {
-      final tomorrow = DateTime.now().add(const Duration(days: 1));
-      checkOut =
-          '${tomorrow.year}-${tomorrow.month.toString().padLeft(2, '0')}-${tomorrow.day.toString().padLeft(2, '0')}';
+    if (checkIn.isEmpty || checkOut.isEmpty) {
+      throw Exception(
+        'Missing trip dates for this hotel. Please search hotels again and select the same property.',
+      );
     }
 
     // Default rooms config if not in hotel object

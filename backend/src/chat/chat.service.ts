@@ -37,6 +37,18 @@ export class ChatService {
     return id;
   }
 
+  private getOrCreateSession(sessionId: string): SessionData {
+    const existing = this.sessions.get(sessionId);
+    if (existing) return existing;
+
+    const created: SessionData = {
+      state: 'idle',
+      bookingType: undefined,
+    };
+    this.sessions.set(sessionId, created);
+    return created;
+  }
+
   private extractDates(text: string): string[] {
     const dateRegex = /\d{4}-\d{2}-\d{2}/g;
     return text.match(dateRegex) || [];
@@ -175,7 +187,7 @@ export class ChatService {
   }
 
   async handleMessage(sessionId: string, message: string) {
-    const sess = this.sessions.get(sessionId);
+    const sess = this.getOrCreateSession(sessionId);
     const text = (message || '').toLowerCase().trim();
     const originalMessage = message.trim();
 
@@ -662,6 +674,8 @@ export class ChatService {
         return {
           sessionId,
           reply: `Perfect! I found hotels in ${searchCity} from ${sess.checkIn} to ${sess.checkOut}. Which one interests you?`,
+          checkIn: sess.checkIn,
+          checkOut: sess.checkOut,
           cards: formattedCards,
         };
       } catch (error) {

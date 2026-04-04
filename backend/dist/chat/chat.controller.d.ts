@@ -10,6 +10,8 @@ export declare class ChatController {
         booking?: undefined;
         cards?: undefined;
         sessionId: string;
+        checkIn?: undefined;
+        checkOut?: undefined;
     } | {
         reply: string;
         booking: {
@@ -22,14 +24,20 @@ export declare class ChatController {
         };
         cards?: undefined;
         sessionId: string;
+        checkIn?: undefined;
+        checkOut?: undefined;
     } | {
         reply: string;
         cards: any;
         booking?: undefined;
         sessionId: string;
+        checkIn?: undefined;
+        checkOut?: undefined;
     } | {
         sessionId: string;
         reply: string;
+        checkIn: string;
+        checkOut: string;
         cards: any;
         booking?: undefined;
     }>;

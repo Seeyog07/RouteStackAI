@@ -133,6 +133,16 @@ class _HomePageState extends State<HomePage> {
   void _handleApiResponse(Map<String, dynamic> data) {
     sessionId = data['sessionId'] ?? sessionId;
 
+    // Persist hotel date context whenever backend provides it.
+    final responseCheckIn = data['checkIn']?.toString().trim();
+    final responseCheckOut = data['checkOut']?.toString().trim();
+    if (responseCheckIn != null && responseCheckIn.isNotEmpty) {
+      lastSearchCheckIn = responseCheckIn;
+    }
+    if (responseCheckOut != null && responseCheckOut.isNotEmpty) {
+      lastSearchCheckOut = responseCheckOut;
+    }
+
     // Update sessionId if returned
     if (data['sessionId'] != null) {
       sessionId = data['sessionId'];
@@ -206,8 +216,16 @@ class _HomePageState extends State<HomePage> {
                   'token': flight['token'] ?? flight['result']?['token'],
                   'recommendationId': flight['recommendationId'] ??
                       flight['result']?['recommendationId'],
+                  'checkIn': responseCheckIn ?? lastSearchCheckIn,
+                  'checkOut': responseCheckOut ?? lastSearchCheckOut,
                 };
               }
+
+              return {
+                ...flight,
+                'checkIn': flight['checkIn'] ?? responseCheckIn ?? lastSearchCheckIn,
+                'checkOut': flight['checkOut'] ?? responseCheckOut ?? lastSearchCheckOut,
+              };
             }
             return flight;
           }).toList();
@@ -268,8 +286,8 @@ class _HomePageState extends State<HomePage> {
                     ? nestedRecommendationId
                     : lastRecommendationId,
             // Preserve search context for booking
-            'checkIn': data['checkIn'] ?? lastSearchCheckIn,
-            'checkOut': data['checkOut'] ?? lastSearchCheckOut,
+            'checkIn': item['checkIn'] ?? responseCheckIn ?? lastSearchCheckIn,
+            'checkOut': item['checkOut'] ?? responseCheckOut ?? lastSearchCheckOut,
             'rooms': item['rooms'] ??
                 [
                   {

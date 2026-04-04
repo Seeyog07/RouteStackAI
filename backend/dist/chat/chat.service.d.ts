@@ -4,6 +4,7 @@ export declare class ChatService {
     private sessions;
     constructor(bookingsService: BookingsService);
     ensureSession(sessionId?: string): string;
+    private getOrCreateSession;
     private extractDates;
     private extractLocations;
     private extractCity;
@@ -20,6 +21,8 @@ export declare class ChatService {
         booking?: undefined;
         cards?: undefined;
         sessionId?: undefined;
+        checkIn?: undefined;
+        checkOut?: undefined;
     } | {
         reply: string;
         booking: {
@@ -32,14 +35,20 @@ export declare class ChatService {
         };
         cards?: undefined;
         sessionId?: undefined;
+        checkIn?: undefined;
+        checkOut?: undefined;
     } | {
         reply: string;
         cards: any;
         booking?: undefined;
         sessionId?: undefined;
+        checkIn?: undefined;
+        checkOut?: undefined;
     } | {
         sessionId: string;
         reply: string;
+        checkIn: string;
+        checkOut: string;
         cards: any;
         booking?: undefined;
     }>;
