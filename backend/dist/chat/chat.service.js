@@ -23,6 +23,7 @@ let ChatService = class ChatService {
             this.sessions.set(id, {
                 state: 'idle',
                 bookingType: undefined,
+                history: [],
             });
         }
         return id;
@@ -34,13 +35,460 @@ let ChatService = class ChatService {
         const created = {
             state: 'idle',
             bookingType: undefined,
+            history: [],
         };
         this.sessions.set(sessionId, created);
         return created;
     }
+    addConversationTurn(sess, role, text) {
+        const trimmed = (text || '').trim();
+        if (!trimmed)
+            return;
+        if (!sess.history)
+            sess.history = [];
+        sess.history.push({ role, text: trimmed });
+        if (sess.history.length > 12) {
+            sess.history = sess.history.slice(-12);
+        }
+    }
+    recordAssistantReply(sessionId, reply) {
+        if (!reply)
+            return;
+        const sess = this.getOrCreateSession(sessionId);
+        this.addConversationTurn(sess, 'assistant', reply);
+    }
+    getCompactHistory(sess, turns = 6) {
+        if (!sess.history?.length)
+            return [];
+        return sess.history
+            .slice(-turns)
+            .map((h) => ({ role: h.role, text: h.text.slice(0, 180) }));
+    }
+    normalizeIsoDate(value) {
+        if (!value)
+            return undefined;
+        const normalized = String(value).trim();
+        const match = normalized.match(/^(\d{4})-(\d{2})-(\d{2})/);
+        if (!match)
+            return undefined;
+        const year = Number(match[1]);
+        const month = Number(match[2]);
+        const day = Number(match[3]);
+        const parsed = new Date(`${match[1]}-${match[2]}-${match[3]}T00:00:00`);
+        if (!Number.isFinite(parsed.getTime()))
+            return undefined;
+        if (parsed.getFullYear() !== year || parsed.getMonth() + 1 !== month || parsed.getDate() !== day) {
+            return undefined;
+        }
+        return `${match[1]}-${match[2]}-${match[3]}`;
+    }
+    sanitizeLlmTextValue(value) {
+        if (!value)
+            return undefined;
+        const cleaned = this.sanitizeLocationCandidate(String(value).trim());
+        if (!cleaned)
+            return undefined;
+        if (!/^[a-zA-Z][a-zA-Z\s.'-]{1,49}$/.test(cleaned))
+            return undefined;
+        return cleaned;
+    }
+    sanitizeLlmInterpretation(raw) {
+        if (!raw || typeof raw !== 'object')
+            return null;
+        const clean = {};
+        if (raw.bookingType === 'flight' || raw.bookingType === 'hotel') {
+            clean.bookingType = raw.bookingType;
+        }
+        const from = this.sanitizeLlmTextValue(raw.from ?? undefined);
+        const to = this.sanitizeLlmTextValue(raw.to ?? undefined);
+        const city = this.sanitizeLlmTextValue(raw.city ?? undefined);
+        const country = this.sanitizeLlmTextValue(raw.country ?? undefined);
+        if (from)
+            clean.from = from;
+        if (to)
+            clean.to = to;
+        if (city)
+            clean.city = city;
+        if (country)
+            clean.country = country;
+        const departureDate = this.normalizeIsoDate(raw.departureDate ?? undefined);
+        if (departureDate && !this.isPastIsoDate(departureDate)) {
+            clean.departureDate = departureDate;
+        }
+        const checkIn = this.normalizeIsoDate(raw.checkIn ?? undefined);
+        if (checkIn && !this.isPastIsoDate(checkIn)) {
+            clean.checkIn = checkIn;
+        }
+        const checkOut = this.normalizeIsoDate(raw.checkOut ?? undefined);
+        if (checkOut && (!clean.checkIn || checkOut >= clean.checkIn)) {
+            clean.checkOut = checkOut;
+        }
+        const bookingId = (raw.bookingId || '').trim();
+        if (/^[a-zA-Z0-9_-]{3,40}$/.test(bookingId)) {
+            clean.bookingId = bookingId;
+        }
+        if (Number.isInteger(raw.adults) && raw.adults >= 1 && raw.adults <= 9) {
+            clean.adults = raw.adults;
+        }
+        if (Number.isInteger(raw.children) && raw.children >= 0 && raw.children <= 9) {
+            clean.children = raw.children;
+        }
+        const allowedIntents = new Set([
+            'flight booking',
+            'hotel booking',
+            'booking info',
+            'booking cancellation',
+            'selection',
+            'unknown',
+        ]);
+        if (typeof raw.intent === 'string' && allowedIntents.has(raw.intent.trim().toLowerCase())) {
+            clean.intent = raw.intent.trim().toLowerCase();
+        }
+        if (typeof raw.confidence === 'number' && raw.confidence >= 0 && raw.confidence <= 1) {
+            clean.confidence = raw.confidence;
+        }
+        if (typeof raw.reply === 'string') {
+            const reply = raw.reply.trim();
+            if (reply && reply.length <= 300) {
+                clean.reply = reply;
+            }
+        }
+        return Object.keys(clean).length ? clean : null;
+    }
+    mergeLlmInterpretation(sess, interpretation) {
+        if (interpretation.bookingType) {
+            this.setBookingType(sess, interpretation.bookingType);
+        }
+        if (!sess.from && interpretation.from)
+            sess.from = interpretation.from;
+        if (!sess.to && interpretation.to)
+            sess.to = interpretation.to;
+        if (!sess.city && interpretation.city)
+            sess.city = interpretation.city;
+        if (!sess.country && interpretation.country)
+            sess.country = interpretation.country;
+        if (!sess.departureDate && interpretation.departureDate) {
+            sess.departureDate = interpretation.departureDate;
+        }
+        if (!sess.checkIn && interpretation.checkIn)
+            sess.checkIn = interpretation.checkIn;
+        if (!sess.checkOut && interpretation.checkOut)
+            sess.checkOut = interpretation.checkOut;
+        if (sess.adults == null && interpretation.adults != null)
+            sess.adults = interpretation.adults;
+        if (sess.children == null && interpretation.children != null)
+            sess.children = interpretation.children;
+        if (interpretation.bookingId)
+            sess.lastBookingId = interpretation.bookingId;
+    }
+    parseLlmJson(content) {
+        const trimmed = content.trim();
+        const jsonText = trimmed.startsWith('```')
+            ? trimmed.replace(/^```(?:json)?\s*/i, '').replace(/\s*```$/i, '').trim()
+            : trimmed;
+        try {
+            return JSON.parse(jsonText);
+        }
+        catch {
+            const firstBrace = jsonText.indexOf('{');
+            const lastBrace = jsonText.lastIndexOf('}');
+            if (firstBrace >= 0 && lastBrace > firstBrace) {
+                try {
+                    return JSON.parse(jsonText.slice(firstBrace, lastBrace + 1));
+                }
+                catch {
+                    return null;
+                }
+            }
+            return null;
+        }
+    }
+    async inferBookingContextWithLlm(message, sess) {
+        const provider = (process.env.LLM_PROVIDER || process.env.LLM_PROVIDER_NAME || 'groq').toLowerCase();
+        const apiKey = process.env.LLM_API_KEY ||
+            process.env.GROQ_API_KEY ||
+            process.env.OPENAI_API_KEY;
+        if (!apiKey)
+            return null;
+        const baseUrl = (process.env.LLM_BASE_URL ||
+            (provider === 'groq'
+                ? process.env.GROQ_BASE_URL
+                : process.env.OPENAI_BASE_URL) ||
+            'https://api.groq.com/openai/v1')
+            .replace(/\/$/, '');
+        const model = process.env.LLM_MODEL ||
+            (provider === 'groq'
+                ? process.env.GROQ_MODEL
+                : process.env.OPENAI_MODEL) ||
+            'llama-3.1-8b-instant';
+        const fetchFn = globalThis.fetch;
+        if (typeof fetchFn !== 'function')
+            return null;
+        const payload = {
+            session: {
+                bookingType: sess.bookingType ?? null,
+                from: sess.from ?? null,
+                to: sess.to ?? null,
+                city: sess.city ?? null,
+                country: sess.country ?? null,
+                departureDate: sess.departureDate ?? null,
+                checkIn: sess.checkIn ?? null,
+                checkOut: sess.checkOut ?? null,
+                adults: sess.adults ?? null,
+                children: sess.children ?? null,
+            },
+            history: this.getCompactHistory(sess, 6),
+            message,
+        };
+        const systemPrompt = [
+            'You are a travel booking assistant that extracts intent and missing slots.',
+            'Return JSON only. Do not wrap the response in markdown.',
+            'Supported intents: flight booking, hotel booking, booking info, booking cancellation, selection, unknown.',
+            'Only fill values that are explicitly present in the user message or obvious from session context.',
+            'Use null for any unknown field. Do not invent dates, cities, or booking IDs.',
+            'Prefer ISO dates in YYYY-MM-DD when a date is clearly stated.',
+            'Schema: {"bookingType":"flight|hotel|null","from":string|null,"to":string|null,"city":string|null,"country":string|null,"departureDate":string|null,"checkIn":string|null,"checkOut":string|null,"bookingId":string|null,"adults":number|null,"children":number|null,"intent":string|null,"confidence":number|null,"reply":string|null}'
+        ].join(' ');
+        try {
+            const response = await fetchFn(`${baseUrl}/chat/completions`, {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                    Authorization: `Bearer ${apiKey}`,
+                },
+                body: JSON.stringify({
+                    model,
+                    temperature: 0,
+                    response_format: { type: 'json_object' },
+                    messages: [
+                        { role: 'system', content: systemPrompt },
+                        { role: 'user', content: JSON.stringify(payload) },
+                    ],
+                }),
+            });
+            if (!response.ok) {
+                console.warn(`[LLM] inference request failed: ${response.status}`);
+                return null;
+            }
+            const data = await response.json();
+            const content = data?.choices?.[0]?.message?.content;
+            if (typeof content !== 'string' || !content.trim())
+                return null;
+            const interpretation = this.sanitizeLlmInterpretation(this.parseLlmJson(content));
+            if (!interpretation)
+                return null;
+            console.log('[LLM] sanitized interpretation:', JSON.stringify(interpretation));
+            return interpretation;
+        }
+        catch (error) {
+            console.warn('[LLM] inference failed:', error);
+            return null;
+        }
+    }
     extractDates(text) {
-        const dateRegex = /\d{4}-\d{2}-\d{2}/g;
-        return text.match(dateRegex) || [];
+        const dates = [];
+        const seen = new Set();
+        const pushDate = (value) => {
+            if (!value)
+                return;
+            const normalized = this.normalizeIsoDate(value);
+            if (!normalized || seen.has(normalized))
+                return;
+            seen.add(normalized);
+            dates.push(normalized);
+        };
+        const isoRegex = /\b\d{4}-\d{2}-\d{2}\b/g;
+        for (const match of text.matchAll(isoRegex)) {
+            pushDate(match[0]);
+        }
+        const slashRegex = /\b(\d{1,2})[\/\-](\d{1,2})[\/\-](\d{2,4})\b/g;
+        for (const match of text.matchAll(slashRegex)) {
+            const parsed = this.parseSlashDateMatch(match[1], match[2], match[3]);
+            pushDate(parsed);
+        }
+        const monthFirstRegex = /\b(january|jan|february|feb|march|mar|april|apr|may|june|jun|july|jul|august|aug|september|sep|sept|october|oct|november|nov|december|dec)\s+(\d{1,2})(?:st|nd|rd|th)?(?:\s*,?\s*(\d{4}))?\b/gi;
+        for (const match of text.matchAll(monthFirstRegex)) {
+            const parsed = this.parseMonthNameDate(match[1], match[2], match[3]);
+            pushDate(parsed);
+        }
+        const dayFirstRegex = /\b(\d{1,2})(?:st|nd|rd|th)?\s+(january|jan|february|feb|march|mar|april|apr|may|june|jun|july|jul|august|aug|september|sep|sept|october|oct|november|nov|december|dec)(?:\s*,?\s*(\d{4}))?\b/gi;
+        for (const match of text.matchAll(dayFirstRegex)) {
+            const parsed = this.parseMonthNameDate(match[2], match[1], match[3]);
+            pushDate(parsed);
+        }
+        if (!dates.length) {
+            const relativeDate = this.extractRelativeDate(text);
+            pushDate(relativeDate);
+        }
+        return dates;
+    }
+    isValidDateParts(year, month, day) {
+        if (year < 1900 || year > 2100)
+            return false;
+        if (month < 1 || month > 12)
+            return false;
+        if (day < 1 || day > 31)
+            return false;
+        const date = new Date(year, month - 1, day);
+        return (Number.isFinite(date.getTime()) &&
+            date.getFullYear() === year &&
+            date.getMonth() === month - 1 &&
+            date.getDate() === day);
+    }
+    toIsoFromParts(year, month, day) {
+        return `${year}-${String(month).padStart(2, '0')}-${String(day).padStart(2, '0')}`;
+    }
+    parseSlashDateMatch(firstRaw, secondRaw, yearRaw) {
+        const first = Number(firstRaw);
+        const second = Number(secondRaw);
+        let year = Number(yearRaw);
+        if (!Number.isFinite(first) || !Number.isFinite(second) || !Number.isFinite(year))
+            return undefined;
+        if (yearRaw.length === 2)
+            year += 2000;
+        const candidates = [];
+        if (first > 12 && second <= 12) {
+            candidates.push({ day: first, month: second });
+        }
+        else if (second > 12 && first <= 12) {
+            candidates.push({ day: second, month: first });
+        }
+        else {
+            candidates.push({ day: first, month: second });
+            if (!(first === second)) {
+                candidates.push({ day: second, month: first });
+            }
+        }
+        for (const c of candidates) {
+            if (this.isValidDateParts(year, c.month, c.day)) {
+                return this.toIsoFromParts(year, c.month, c.day);
+            }
+        }
+        return undefined;
+    }
+    parseMonthNameDate(monthText, dayText, yearText) {
+        const monthMap = {
+            january: 1,
+            jan: 1,
+            february: 2,
+            feb: 2,
+            march: 3,
+            mar: 3,
+            april: 4,
+            apr: 4,
+            may: 5,
+            june: 6,
+            jun: 6,
+            july: 7,
+            jul: 7,
+            august: 8,
+            aug: 8,
+            september: 9,
+            sep: 9,
+            sept: 9,
+            october: 10,
+            oct: 10,
+            november: 11,
+            nov: 11,
+            december: 12,
+            dec: 12,
+        };
+        const month = monthMap[monthText.toLowerCase()];
+        const day = Number(dayText);
+        if (!month || !Number.isFinite(day))
+            return undefined;
+        let year = yearText ? Number(yearText) : new Date().getFullYear();
+        if (!Number.isFinite(year))
+            return undefined;
+        if (!this.isValidDateParts(year, month, day))
+            return undefined;
+        let iso = this.toIsoFromParts(year, month, day);
+        if (!yearText && this.isPastIsoDate(iso)) {
+            year += 1;
+            if (this.isValidDateParts(year, month, day)) {
+                iso = this.toIsoFromParts(year, month, day);
+            }
+        }
+        return iso;
+    }
+    toIsoDate(date) {
+        const year = date.getFullYear();
+        const month = String(date.getMonth() + 1).padStart(2, '0');
+        const day = String(date.getDate()).padStart(2, '0');
+        return `${year}-${month}-${day}`;
+    }
+    getNextWeekday(targetWeekday) {
+        const now = new Date();
+        const todayWeekday = now.getDay();
+        let delta = (targetWeekday - todayWeekday + 7) % 7;
+        if (delta === 0)
+            delta = 7;
+        const result = new Date(now);
+        result.setDate(now.getDate() + delta);
+        return result;
+    }
+    extractRelativeDate(text) {
+        const lower = text.toLowerCase();
+        const now = new Date();
+        if (/\btoday\b/.test(lower)) {
+            return this.toIsoDate(now);
+        }
+        if (/\btomorrow\b/.test(lower)) {
+            const tomorrow = new Date(now);
+            tomorrow.setDate(now.getDate() + 1);
+            return this.toIsoDate(tomorrow);
+        }
+        if (/\bnext\s+week\b/.test(lower)) {
+            const nextWeek = new Date(now);
+            nextWeek.setDate(now.getDate() + 7);
+            return this.toIsoDate(nextWeek);
+        }
+        const weekdays = {
+            sunday: 0,
+            monday: 1,
+            tuesday: 2,
+            wednesday: 3,
+            thursday: 4,
+            friday: 5,
+            saturday: 6,
+        };
+        const nextWeekdayMatch = lower.match(/\bnext\s+(sunday|monday|tuesday|wednesday|thursday|friday|saturday)\b/);
+        if (nextWeekdayMatch) {
+            const weekday = weekdays[nextWeekdayMatch[1]];
+            return this.toIsoDate(this.getNextWeekday(weekday));
+        }
+        return null;
+    }
+    sanitizeLocationCandidate(value) {
+        if (!value)
+            return value;
+        const cleaned = value
+            .replace(/\bnext\s+(sunday|monday|tuesday|wednesday|thursday|friday|saturday)\b/gi, ' ')
+            .replace(/\bnext\s+week\b/gi, ' ')
+            .replace(/\b(today|tomorrow|tonight|this\s+weekend)\b/gi, ' ')
+            .replace(/\b(on|at)\s+\d{4}-\d{2}-\d{2}\b/gi, ' ')
+            .replace(/\s+/g, ' ')
+            .trim();
+        return cleaned || undefined;
+    }
+    isPastIsoDate(dateText) {
+        if (!dateText)
+            return false;
+        const normalized = String(dateText).trim();
+        const isoMatch = normalized.match(/^(\d{4}-\d{2}-\d{2})/);
+        if (!isoMatch)
+            return false;
+        const dateOnly = isoMatch[1];
+        const today = new Date();
+        const todayOnly = new Date(today.getFullYear(), today.getMonth(), today.getDate());
+        const parsed = new Date(`${dateOnly}T00:00:00`);
+        return Number.isFinite(parsed.getTime()) && parsed < todayOnly;
+    }
+    hasPotentialDateMention(text) {
+        return (/\b\d{1,2}[\/\-]\d{1,2}[\/\-]\d{2,4}\b/.test(text) ||
+            /\b\d{4}-\d{2}-\d{2}\b/.test(text) ||
+            /\b(?:january|jan|february|feb|march|mar|april|apr|may|june|jun|july|jul|august|aug|september|sep|sept|october|oct|november|nov|december|dec)\b/i.test(text) ||
+            /\b(?:today|tomorrow|next\s+week|next\s+sunday|next\s+monday|next\s+tuesday|next\s+wednesday|next\s+thursday|next\s+friday|next\s+saturday)\b/i.test(text));
     }
     extractLocations(text) {
         const cleanedInput = text
@@ -50,16 +498,20 @@ let ChatService = class ChatService {
         let fromToRegex = /(?:from|departure|origin|starting?\s+(?:from|at))\s+([a-z\s]+?)(?:\s+to\s+|\s+and\s+|\s*→\s*|\s*-\s*)([a-z\s]+?)(?:\s+on|\s+in|\s+for|\s+with|$|\.|,)/i;
         let match = cleanedInput.match(fromToRegex);
         if (match) {
-            console.log('[extractLocations] Pattern 1 matched:', match[1], '→', match[2]);
-            return { from: match[1].trim(), to: match[2].trim() };
+            const from = this.sanitizeLocationCandidate(match[1].trim());
+            const to = this.sanitizeLocationCandidate(match[2].trim());
+            console.log('[extractLocations] Pattern 1 matched:', from, '→', to);
+            return { from, to };
         }
         fromToRegex = /([a-z\s]+?)\s+to\s+([a-z\s]+?)(?:\s+on|\s+in|\s+for|\s+with|$|\.|,)/i;
         match = cleanedInput.match(fromToRegex);
         if (match) {
             const firstPart = match[1].toLowerCase();
             if (!['talk', 'speak', 'say', 'tell', 'listen'].includes(firstPart)) {
-                console.log('[extractLocations] Pattern 2 matched:', match[1], '→', match[2]);
-                return { from: match[1].trim(), to: match[2].trim() };
+                const from = this.sanitizeLocationCandidate(match[1].trim());
+                const to = this.sanitizeLocationCandidate(match[2].trim());
+                console.log('[extractLocations] Pattern 2 matched:', from, '→', to);
+                return { from, to };
             }
         }
         console.log('[extractLocations] No patterns matched. Input:', text);
@@ -95,6 +547,9 @@ let ChatService = class ChatService {
             return 'Where would you like to fly to?';
         if (!data.departureDate)
             return 'What date would you like to depart? (format: YYYY-MM-DD)';
+        if (this.isPastIsoDate(data.departureDate)) {
+            return 'Departure date cannot be in the past. Please provide a date that is today or later.';
+        }
         return null;
     }
     validateHotelData(data) {
@@ -104,6 +559,15 @@ let ChatService = class ChatService {
             return 'When is your check-in date? (format: YYYY-MM-DD)';
         if (!data.checkOut)
             return 'When is your check-out date? (format: YYYY-MM-DD)';
+        if (this.isPastIsoDate(data.checkIn)) {
+            return 'Check-in date cannot be in the past. Please provide a date that is today or later.';
+        }
+        if (this.isPastIsoDate(data.checkOut)) {
+            return 'Check-out date cannot be in the past. Please provide a date that is today or later.';
+        }
+        if (data.checkOut < data.checkIn) {
+            return `Check-out date (${data.checkOut}) cannot be before check-in date (${data.checkIn}). Please correct the dates.`;
+        }
         return null;
     }
     clearFlightFields(sess) {
@@ -158,6 +622,7 @@ let ChatService = class ChatService {
         const sess = this.getOrCreateSession(sessionId);
         const text = (message || '').toLowerCase().trim();
         const originalMessage = message.trim();
+        this.addConversationTurn(sess, 'user', originalMessage);
         if (/\b(?:hi|hello|help)\b/i.test(text)) {
             return {
                 reply: "Hi! 👋 I can help you book flights or hotels. Try:\n• 'Book a flight from Mumbai to NYC'\n• 'Book a hotel in London'\n\nJust tell me what you need!",
@@ -210,13 +675,50 @@ let ChatService = class ChatService {
                 return { reply: 'Great, got the city. What is your check-in date? (YYYY-MM-DD)' };
             }
             if (sess.state === 'awaiting_checkin' && originalMessage) {
-                sess.checkIn = originalMessage.trim();
+                const parsedDates = this.extractDates(originalMessage);
+                if (!parsedDates.length) {
+                    return {
+                        reply: 'That check-in date looks invalid. Please enter a valid date like YYYY-MM-DD, DD/MM/YYYY, MM/DD/YYYY, or April 2.',
+                    };
+                }
+                if (this.isPastIsoDate(parsedDates[0])) {
+                    return {
+                        reply: 'Check-in date cannot be in the past. Please provide a future date.',
+                    };
+                }
+                sess.checkIn = parsedDates[0];
                 sess.state = 'awaiting_checkout';
                 return { reply: 'Thanks. What is your check-out date? (YYYY-MM-DD)' };
             }
             if (sess.state === 'awaiting_checkout' && originalMessage) {
-                sess.checkOut = originalMessage.trim();
+                const parsedDates = this.extractDates(originalMessage);
+                if (!parsedDates.length) {
+                    return {
+                        reply: 'That check-out date looks invalid. Please enter a valid date like YYYY-MM-DD, DD/MM/YYYY, MM/DD/YYYY, or April 5.',
+                    };
+                }
+                if (!sess.checkIn) {
+                    sess.state = 'awaiting_checkin';
+                    return { reply: 'Please provide the check-in date first.' };
+                }
+                if (parsedDates[0] < sess.checkIn) {
+                    return {
+                        reply: `Check-out date (${parsedDates[0]}) cannot be before check-in date (${sess.checkIn}). Please provide a valid check-out date.`,
+                    };
+                }
+                sess.checkOut = parsedDates[0];
                 sess.state = 'hotel_ready';
+            }
+        }
+        const shouldUseLlmForIntent = !sess.bookingType &&
+            !this.isBookingInfoRequest(originalMessage) &&
+            !this.isCancelBookingRequest(originalMessage) &&
+            !text.startsWith('select:') &&
+            !/^(?:select|choose|pick|#|number)\s*\d+/i.test(text);
+        if (shouldUseLlmForIntent) {
+            const interpretation = await this.inferBookingContextWithLlm(originalMessage, sess);
+            if (interpretation) {
+                this.mergeLlmInterpretation(sess, interpretation);
             }
         }
         if (/\b(?:book\s+flight|switch\s+to\s+flight|flight|fly|departure)\b/i.test(originalMessage)) {
@@ -427,10 +929,34 @@ let ChatService = class ChatService {
             }
             const dates = this.extractDates(originalMessage);
             console.log(`[Flight Booking] Extracted dates:`, dates);
+            if (this.hasPotentialDateMention(originalMessage) && dates.length === 0) {
+                return {
+                    reply: 'I could not understand the travel date. Please provide it as YYYY-MM-DD, DD/MM/YYYY, MM/DD/YYYY, or month format like April 2.',
+                };
+            }
             if (dates.length > 0)
                 sess.departureDate = dates[0];
             if (dates.length > 1)
                 sess.returnDate = dates[1];
+            if (sess.departureDate && this.isPastIsoDate(sess.departureDate)) {
+                return {
+                    reply: `Your departure date ${sess.departureDate} is in the past. Please provide a future departure date.`,
+                };
+            }
+            if (this.isPastIsoDate(sess.departureDate)) {
+                sess.departureDate = undefined;
+            }
+            if (sess.from && sess.to && sess.from.trim().toLowerCase() === sess.to.trim().toLowerCase()) {
+                return {
+                    reply: 'Origin and destination cannot be the same. Please provide different cities/airports.',
+                };
+            }
+            if (!sess.from || !sess.to || !sess.departureDate) {
+                const interpretation = await this.inferBookingContextWithLlm(originalMessage, sess);
+                if (interpretation) {
+                    this.mergeLlmInterpretation(sess, interpretation);
+                }
+            }
             console.log(`[Flight Booking] Session data before validation:`, {
                 from: sess.from,
                 to: sess.to,
@@ -474,6 +1000,11 @@ let ChatService = class ChatService {
             if (countryFromMessage)
                 sess.country = countryFromMessage;
             const dates = this.extractDates(originalMessage);
+            if (this.hasPotentialDateMention(originalMessage) && dates.length === 0) {
+                return {
+                    reply: 'I could not understand your hotel dates. Please use YYYY-MM-DD, DD/MM/YYYY, MM/DD/YYYY, or month format like April 2 and April 5.',
+                };
+            }
             if (dates.length > 1) {
                 sess.checkIn = dates[0];
                 sess.checkOut = dates[1];
@@ -484,6 +1015,22 @@ let ChatService = class ChatService {
                 }
                 else if (!sess.checkOut) {
                     sess.checkOut = dates[0];
+                }
+            }
+            if (sess.checkIn && this.isPastIsoDate(sess.checkIn)) {
+                return {
+                    reply: `Check-in date ${sess.checkIn} is in the past. Please provide a future check-in date.`,
+                };
+            }
+            if (sess.checkIn && sess.checkOut && sess.checkOut < sess.checkIn) {
+                return {
+                    reply: `Check-out date (${sess.checkOut}) cannot be before check-in date (${sess.checkIn}). Please correct the dates.`,
+                };
+            }
+            if (!sess.city || !sess.checkIn || !sess.checkOut) {
+                const interpretation = await this.inferBookingContextWithLlm(originalMessage, sess);
+                if (interpretation) {
+                    this.mergeLlmInterpretation(sess, interpretation);
                 }
             }
             if (!sess.city) {

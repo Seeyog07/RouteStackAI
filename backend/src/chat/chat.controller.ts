@@ -11,6 +11,7 @@ export class ChatController {
     
     // ✅ YOU MUST AWAIT THE RESULT HERE
     const result = await this.chatService.handleMessage(sessionId, body.message || '');
+    this.chatService.recordAssistantReply(sessionId, result?.reply);
     
     return { sessionId, ...result };
   }

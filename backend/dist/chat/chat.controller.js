@@ -22,6 +22,7 @@ let ChatController = class ChatController {
     async chat(body) {
         const sessionId = this.chatService.ensureSession(body.sessionId);
         const result = await this.chatService.handleMessage(sessionId, body.message || '');
+        this.chatService.recordAssistantReply(sessionId, result?.reply);
         return { sessionId, ...result };
     }
 };
