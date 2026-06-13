@@ -988,6 +988,9 @@ let ChatService = class ChatService {
             catch (error) {
                 sess.state = 'error';
                 console.error('Flight search error:', error);
+                if (error instanceof common_1.BadRequestException) {
+                    return { reply: error.message };
+                }
                 return {
                     reply: `Sorry, I couldn't find flights from ${sess.from} to ${sess.to}. Please try again or choose different cities.`,
                 };
@@ -1093,6 +1096,7 @@ let ChatService = class ChatService {
                     mainamenity: hotel.mainamenity,
                     facilities: hotel.facilities?.slice(0, 5) || [],
                     token: hotel.token,
+                    correlationId: hotel.correlationId || hotel.result?.correlationId,
                 }));
                 return {
                     sessionId,

@@ -1,4 +1,4 @@
-import { Injectable, InternalServerErrorException } from '@nestjs/common';
+import { BadRequestException, Injectable, InternalServerErrorException } from '@nestjs/common';
 import { CreateBookingDto } from './dto/create-booking.dto';
 import * as crypto from 'crypto';
 
@@ -60,9 +60,9 @@ export class BookingsService {
     'johannesburg': 'JNB',
   };
 
-  private normalizeLocation(location: string): string {
+  private normalizeLocation(location: string): string | null {
     const normalized = location.toLowerCase().trim();
-    const code = this.locationMap[normalized] || normalized.toUpperCase();
+    const code = this.locationMap[normalized] || (/^[A-Z]{3}$/.test(normalized.toUpperCase()) ? normalized.toUpperCase() : null);
     console.log(`[normalizeLocation] "${location}" → "${normalized}" → "${code}"`);
     return code;
   }
@@ -73,6 +73,12 @@ export class BookingsService {
     
     const fromCode = this.normalizeLocation(from);
     const toCode = this.normalizeLocation(to);
+
+    if (!fromCode || !toCode) {
+      throw new BadRequestException(
+        'Please provide a proper city name or 3-letter airport code for both origin and destination. State names are not supported for flight search.',
+      );
+    }
 
     console.log(`[findFlights] Codes: fromCode="${fromCode}", toCode="${toCode}"`);
 
@@ -128,15 +134,17 @@ export class BookingsService {
       return hotelBody;
     }
 
-    // Extract token from MCP response and attach to each hotel
+    // Extract token and correlationId from MCP response and attach to each hotel
     const token = hotelBody?.result?.token || hotelBody?.token || '';
+    const correlationId = hotelBody?.result?.correlationId || hotelBody?.correlationId;
     const hotels = hotelBody?.result?.result || hotelBody?.result || [];
     
-    if (Array.isArray(hotels) && token) {
+    if (Array.isArray(hotels)) {
       hotels.forEach((hotel: any) => {
-        hotel.token = token;
+        if (token) hotel.token = token;
+        if (correlationId) hotel.correlationId = correlationId;
       });
-      console.log(`[findHotels] Attached token to ${hotels.length} hotels`);
+      console.log(`[findHotels] Attached token${correlationId ? ' and correlationId' : ''} to ${hotels.length} hotels`);
     }
 
     return hotelBody;
@@ -249,8 +257,17 @@ export class BookingsService {
     return await this.mcpRequest('/mcp/hotel/search-hotels', body);
   }
 
-  async getHotelDetails(hotelId: string) {
-    return await this.mcpRequest('/mcp/hotel/get-hotel-details', { hotelId });
+  async getHotelDetails(params: {
+    hotelId: string;
+    token?: string;
+    correlationId?: string;
+    contentType?: string;
+  }) {
+    const bodyData: any = { hotelId: params.hotelId };
+    if (params.token) bodyData.token = params.token;
+    if (params.correlationId) bodyData.correlationId = params.correlationId;
+    if (params.contentType) bodyData.contentType = params.contentType;
+    return await this.mcpRequest('/mcp/hotel/get-hotel-details', bodyData);
   }
 
   async getHotelDetailsAndRates(params: {
@@ -335,6 +352,89 @@ export class BookingsService {
     return this.bookings;
   }
 
+  private normalizeBaseUrl(baseUrl: string): string {
+    return baseUrl.replace(/\/+$/, '');
+  }
+
+  private buildUrl(baseUrl: string, path: string): string {
+    const normalizedPath = path.startsWith('/') ? path : `/${path}`;
+    return `${this.normalizeBaseUrl(baseUrl)}${normalizedPath}`;
+  }
+
+  private getMcpDataBaseUrls(primaryBaseUrl: string): string[] {
+    const candidates = [
+      primaryBaseUrl,
+      process.env.MCP_DATA_BASE_URL,
+      process.env.MCP_EVOLVE_BASE_URL,
+      process.env.MCP_BASE_URL,
+      process.env.MCP_FALLBACK_BASE_URL,
+      'https://mcp.routestack.ai',
+    ].filter((value): value is string => Boolean(value && value.trim()));
+
+    const unique = new Set<string>();
+    for (const value of candidates) {
+      unique.add(this.normalizeBaseUrl(value));
+    }
+
+    return Array.from(unique);
+  }
+
+  private isRetriableStatus(status: number): boolean {
+    return status === 429 || status === 502 || status === 503 || status === 504;
+  }
+
+  private async wait(ms: number): Promise<void> {
+    await new Promise((resolve) => setTimeout(resolve, ms));
+  }
+
+  private async fetchWithTimeout(url: string, init: any, timeoutMs: number): Promise<any> {
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), timeoutMs);
+    try {
+      return await (globalThis as any).fetch(url, {
+        ...init,
+        signal: controller.signal,
+      });
+    } finally {
+      clearTimeout(timeout);
+    }
+  }
+
+  private async buildResponseError(response: any, context: string): Promise<Error> {
+    const contentType = response.headers?.get?.('content-type') || 'unknown';
+    const raw = await response.text();
+    const preview = raw.slice(0, 220).replace(/\s+/g, ' ').trim();
+    return new Error(
+      `${context} failed (status ${response.status}, content-type "${contentType}", body preview: "${preview}")`,
+    );
+  }
+
+  private async parseJsonResponse(response: any, context: string): Promise<any> {
+    const contentType = response.headers?.get?.('content-type') || '';
+    const raw = await response.text();
+
+    if (!raw) {
+      return {};
+    }
+
+    const looksLikeJson = contentType.toLowerCase().includes('application/json');
+    const preview = raw.slice(0, 220).replace(/\s+/g, ' ').trim();
+
+    if (!looksLikeJson) {
+      throw new Error(
+        `${context} returned non-JSON response (status ${response.status}, content-type "${contentType || 'unknown'}", body preview: "${preview}")`,
+      );
+    }
+
+    try {
+      return JSON.parse(raw);
+    } catch {
+      throw new Error(
+        `${context} returned invalid JSON (status ${response.status}, content-type "${contentType}", body preview: "${preview}")`,
+      );
+    }
+  }
+
   // 6. Private Helper for MCP API Calls
   private async mcpRequest(path: string, body: any, baseUrl?: string, authBaseUrl?: string) {
   // 1. Log Environment Variables at the start
@@ -358,40 +458,105 @@ export class BookingsService {
 
   const resolvedApiKey = apiKey as string;
   const resolvedApiSecret = apiSecret as string;
-  const resolvedBaseUrl = BASE_URL as string;
-  const resolvedAuthBaseUrl = AUTH_BASE_URL as string;
+  const resolvedBaseUrl = this.normalizeBaseUrl(BASE_URL as string);
+  const resolvedAuthBaseUrl = this.normalizeBaseUrl(AUTH_BASE_URL as string);
+  const requestTimeoutMs = Number(process.env.MCP_REQUEST_TIMEOUT_MS || 20000);
+  const maxAttemptsPerBase = 2;
 
   try {
-    const token = await this.getPartnerToken(resolvedApiKey, resolvedApiSecret, resolvedAuthBaseUrl, resolvedBaseUrl);
+    let token = await this.getPartnerToken(resolvedApiKey, resolvedApiSecret, resolvedAuthBaseUrl, resolvedBaseUrl);
+    const dataBaseUrls = this.getMcpDataBaseUrls(resolvedBaseUrl);
+    let lastError: Error | null = null;
 
-    let dataRes = await (globalThis as any).fetch(`${BASE_URL}${path}`, {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'Authorization': `Bearer ${token}`,
-      },
-      body: JSON.stringify(body),
-    });
+    for (const dataBaseUrl of dataBaseUrls) {
+      const requestUrl = this.buildUrl(dataBaseUrl, path);
+      console.log('MCP data URL candidate:', requestUrl);
 
-    if (dataRes.status === 401 || dataRes.status === 403) {
-      console.warn('MCP data request unauthorized, refreshing partner token and retrying once.');
-      this.invalidatePartnerToken(resolvedBaseUrl, resolvedAuthBaseUrl, resolvedApiKey);
-      const refreshedToken = await this.getPartnerToken(resolvedApiKey, resolvedApiSecret, resolvedAuthBaseUrl, resolvedBaseUrl);
-      dataRes = await (globalThis as any).fetch(`${BASE_URL}${path}`, {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          'Authorization': `Bearer ${refreshedToken}`,
-        },
-        body: JSON.stringify(body),
-      });
+      for (let attempt = 1; attempt <= maxAttemptsPerBase; attempt++) {
+        let dataRes: any;
+
+        try {
+          dataRes = await this.fetchWithTimeout(
+            requestUrl,
+            {
+              method: 'POST',
+              headers: {
+                'Content-Type': 'application/json',
+                'Accept': 'application/json',
+                'Authorization': `Bearer ${token}`,
+              },
+              body: JSON.stringify(body),
+            },
+            requestTimeoutMs,
+          );
+        } catch (error) {
+          const err = error as Error;
+          if (attempt < maxAttemptsPerBase) {
+            console.warn(
+              `MCP request error on ${requestUrl} (attempt ${attempt}/${maxAttemptsPerBase}): ${err.message}. Retrying...`,
+            );
+            await this.wait(attempt * 350);
+            continue;
+          }
+
+          lastError = new Error(`MCP ${path} network error on ${requestUrl}: ${err.message}`);
+          break;
+        }
+
+        if (dataRes.status === 401 || dataRes.status === 403) {
+          console.warn('MCP data request unauthorized, refreshing partner token and retrying once.');
+          this.invalidatePartnerToken(resolvedBaseUrl, resolvedAuthBaseUrl, resolvedApiKey);
+          token = await this.getPartnerToken(resolvedApiKey, resolvedApiSecret, resolvedAuthBaseUrl, resolvedBaseUrl);
+
+          dataRes = await this.fetchWithTimeout(
+            requestUrl,
+            {
+              method: 'POST',
+              headers: {
+                'Content-Type': 'application/json',
+                'Accept': 'application/json',
+                'Authorization': `Bearer ${token}`,
+              },
+              body: JSON.stringify(body),
+            },
+            requestTimeoutMs,
+          );
+        }
+
+        if (this.isRetriableStatus(dataRes.status) && attempt < maxAttemptsPerBase) {
+          console.warn(
+            `MCP retriable status ${dataRes.status} for ${requestUrl} (attempt ${attempt}/${maxAttemptsPerBase}). Retrying...`,
+          );
+          await this.wait(attempt * 350);
+          continue;
+        }
+
+        if (this.isRetriableStatus(dataRes.status) && attempt >= maxAttemptsPerBase) {
+          lastError = await this.buildResponseError(dataRes, `MCP ${path}`);
+          break;
+        }
+
+        const data = await this.parseJsonResponse(dataRes, `MCP ${path}`);
+        if (!dataRes.ok) {
+          console.error('MCP request failed:', {
+            path,
+            status: dataRes.status,
+            body: data,
+            requestUrl,
+          });
+        }
+
+        console.log('MCP Response Status:', dataRes.status);
+        console.log('--- MCP Debug End ---');
+        return { status: dataRes.status, body: data };
+      }
+
+      if (lastError) {
+        console.warn(`MCP candidate ${dataBaseUrl} failed: ${lastError.message}`);
+      }
     }
 
-    const data = await dataRes.json();
-    console.log('MCP Response Status:', dataRes.status);
-    console.log('--- MCP Debug End ---');
-
-    return { status: dataRes.status, body: data };
+    throw lastError || new Error(`MCP ${path} failed across all configured base URLs`);
   } catch (e) {
     const errorMessage = e instanceof Error ? e.message : 'MCP Request failed';
     console.error('MCP Request Exception:', errorMessage);
@@ -443,7 +608,10 @@ export class BookingsService {
 
       const authRes = await (globalThis as any).fetch(`${authBaseUrl}/mcp/auth/partner-token`, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: {
+          'Content-Type': 'application/json',
+          'Accept': 'application/json',
+        },
         body: JSON.stringify({ apiKey, hmac, timestamp: ts, nonce }),
       });
 
@@ -459,7 +627,7 @@ export class BookingsService {
         throw new Error(`Auth failed: ${authRes.status}`);
       }
 
-      const authBody = await authRes.json();
+      const authBody = await this.parseJsonResponse(authRes, 'MCP auth partner-token');
       const token = authBody?.token?.toString();
 
       if (!token) {

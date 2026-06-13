@@ -313,12 +313,26 @@ class BookingService {
   }
 
   /// Get hotel details (fallback for revalidate token/recommendationId)
-  Future<dynamic> getHotelDetails(String hotelId) async {
+  Future<dynamic> getHotelDetails({
+    required String hotelId,
+    String? token,
+    String? correlationId,
+    String? contentType,
+  }) async {
     try {
+      final body = <String, dynamic>{
+        'hotelId': hotelId,
+        if (token != null && token.isNotEmpty) 'token': token,
+        if (correlationId != null && correlationId.isNotEmpty)
+          'correlationId': correlationId,
+        if (contentType != null && contentType.isNotEmpty)
+          'contentType': contentType,
+      };
+
       final response = await http.post(
         Uri.parse('$baseUrl/mcp/hotel/get-hotel-details'),
         headers: {'Content-Type': 'application/json'},
-        body: json.encode({'hotelId': hotelId}),
+        body: _encodeBody(body),
       );
 
       if (response.statusCode == 200 || response.statusCode == 201) {

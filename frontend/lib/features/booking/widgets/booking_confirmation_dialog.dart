@@ -130,12 +130,19 @@ class _BookingConfirmationDialogState extends State<BookingConfirmationDialog> {
 
     String token = widget.hotel['token'] ?? widget.hotel['hotelToken'] ?? '';
     String recommendationId = widget.hotel['recommendationId'] ??
-        widget.hotel['recommendationId'] ??
+        widget.hotel['correlationId']?.toString() ??
         '';
 
     // Fetch hotel details for token/recommendation if missing
     if ((token.isEmpty || recommendationId.isEmpty) && hotelId.isNotEmpty) {
-      final details = await widget.bookingService.getHotelDetails(hotelId);
+      final details = await widget.bookingService.getHotelDetails(
+        hotelId: hotelId,
+        token: widget.hotel['token']?.toString() ??
+            widget.hotel['hotelToken']?.toString() ??
+            '',
+        correlationId: widget.hotel['correlationId']?.toString() ?? '',
+        contentType: 'ALL',
+      );
       if (details is Map) {
         token = token.isNotEmpty
             ? token

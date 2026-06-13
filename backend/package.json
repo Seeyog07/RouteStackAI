@@ -5,7 +5,8 @@
   "scripts": {
     "dev": "ts-node-dev --respawn --transpile-only src/main.ts",
     "start": "node dist/main.js",
-    "build": "tsc -p tsconfig.build.json"
+    "build": "tsc -p tsconfig.build.json",
+    "mcp:search-destinations": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/mcp-search-destinations.ps1"
   },
   "dependencies": {
     "@nestjs/common": "^10.0.0",

@@ -45,8 +45,16 @@ export class BookingsController {
   }
 
   @Post('mcp/hotel/get-hotel-details')
-  async proxyGetHotelDetails(@Body() body: { hotelId: string }) {
-    const res = await this.service.getHotelDetails(body.hotelId);
+  async proxyGetHotelDetails(
+    @Body()
+    body: {
+      hotelId: string;
+      token?: string;
+      correlationId?: string;
+      contentType?: string;
+    },
+  ) {
+    const res = await this.service.getHotelDetails(body);
     return res.body;
   }
 

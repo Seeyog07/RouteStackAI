@@ -96,9 +96,11 @@ class _ImageCarouselWidgetState extends State<ImageCarouselWidget> {
               child: Container(
                 height: 300,
                 color: Colors.grey[200],
+                alignment: Alignment.center,
                 child: Image.network(
                   imageUrl,
-                  fit: BoxFit.cover,
+                  fit: BoxFit.contain,
+                  alignment: Alignment.center,
                   loadingBuilder: (context, child, loadingProgress) {
                     if (loadingProgress == null) return child;
                     return Center(
@@ -112,6 +114,7 @@ class _ImageCarouselWidgetState extends State<ImageCarouselWidget> {
                   },
                   errorBuilder: (context, error, stackTrace) => Container(
                     color: Colors.grey[300],
+                    alignment: Alignment.center,
                     child: Icon(
                       Icons.image_not_supported,
                       size: 64,

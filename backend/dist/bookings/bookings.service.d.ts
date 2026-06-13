@@ -29,7 +29,12 @@ export declare class BookingsService {
         status: any;
         body: any;
     }>;
-    getHotelDetails(hotelId: string): Promise<{
+    getHotelDetails(params: {
+        hotelId: string;
+        token?: string;
+        correlationId?: string;
+        contentType?: string;
+    }): Promise<{
         status: any;
         body: any;
     }>;
@@ -88,6 +93,14 @@ export declare class BookingsService {
         id: string;
     };
     listBookings(): any[];
+    private normalizeBaseUrl;
+    private buildUrl;
+    private getMcpDataBaseUrls;
+    private isRetriableStatus;
+    private wait;
+    private fetchWithTimeout;
+    private buildResponseError;
+    private parseJsonResponse;
     private mcpRequest;
     private invalidatePartnerToken;
     private getPartnerToken;

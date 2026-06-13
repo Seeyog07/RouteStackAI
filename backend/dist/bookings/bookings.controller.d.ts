@@ -13,6 +13,9 @@ export declare class BookingsController {
     proxySearchHotels(body: any): Promise<any>;
     proxyGetHotelDetails(body: {
         hotelId: string;
+        token?: string;
+        correlationId?: string;
+        contentType?: string;
     }): Promise<any>;
     proxyGetRoomsAndRates(body: {
         token: string;
