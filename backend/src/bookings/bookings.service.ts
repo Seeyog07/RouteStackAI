@@ -364,12 +364,9 @@ export class BookingsService {
   try {
     const token = await this.getPartnerToken(resolvedApiKey, resolvedApiSecret, resolvedAuthBaseUrl, resolvedBaseUrl);
 
-    let dataRes = await (globalThis as any).fetch(`${BASE_URL}${path}`, {
+    let dataRes = await (globalThis as any).fetch(`${resolvedBaseUrl}${path}`, {
       method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'Authorization': `Bearer ${token}`,
-      },
+      headers: this.buildMcpAuthHeaders(token, resolvedApiKey),
       body: JSON.stringify(body),
     });
 
@@ -377,12 +374,9 @@ export class BookingsService {
       console.warn('MCP data request unauthorized, refreshing partner token and retrying once.');
       this.invalidatePartnerToken(resolvedBaseUrl, resolvedAuthBaseUrl, resolvedApiKey);
       const refreshedToken = await this.getPartnerToken(resolvedApiKey, resolvedApiSecret, resolvedAuthBaseUrl, resolvedBaseUrl);
-      dataRes = await (globalThis as any).fetch(`${BASE_URL}${path}`, {
+      dataRes = await (globalThis as any).fetch(`${resolvedBaseUrl}${path}`, {
         method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          'Authorization': `Bearer ${refreshedToken}`,
-        },
+        headers: this.buildMcpAuthHeaders(refreshedToken, resolvedApiKey),
         body: JSON.stringify(body),
       });
     }
@@ -460,7 +454,8 @@ export class BookingsService {
       }
 
       const authBody = await authRes.json();
-      const token = authBody?.token?.toString();
+      console.log('Auth Response Keys:', Object.keys(authBody || {}));
+      const token = this.extractPartnerToken(authBody);
 
       if (!token) {
         throw new Error('Auth failed: missing token in response');
@@ -483,5 +478,39 @@ export class BookingsService {
     } finally {
       this.partnerTokenRequest = null;
     }
+  }
+
+  private buildMcpAuthHeaders(token: string, apiKey: string): Record<string, string> {
+    const normalizedToken = this.normalizePartnerToken(token);
+    return {
+      'Content-Type': 'application/json',
+      Authorization: `Bearer ${normalizedToken}`,
+      'x-partner-token': normalizedToken,
+      'x-api-key': apiKey,
+    };
+  }
+
+  private normalizePartnerToken(token: string): string {
+    return token.replace(/^Bearer\s+/i, '').trim();
+  }
+
+  private extractPartnerToken(authBody: any): string | null {
+    const candidates = [
+      authBody?.token,
+      authBody?.accessToken,
+      authBody?.partnerToken,
+      authBody?.data?.token,
+      authBody?.data?.accessToken,
+      authBody?.result?.token,
+      authBody?.result?.accessToken,
+    ];
+
+    for (const candidate of candidates) {
+      if (typeof candidate === 'string' && candidate.trim()) {
+        return this.normalizePartnerToken(candidate);
+      }
+    }
+
+    return null;
   }
 }

@@ -122,6 +122,8 @@ export class ChatService {
     if (!value) return undefined;
     const cleaned = this.sanitizeLocationCandidate(String(value).trim());
     if (!cleaned) return undefined;
+    const lowered = cleaned.toLowerCase();
+    if (['for', 'with', 'and', 'from', 'to', 'on', 'at', 'in'].includes(lowered)) return undefined;
     if (!/^[a-zA-Z][a-zA-Z\s.'-]{1,49}$/.test(cleaned)) return undefined;
     return cleaned;
   }
@@ -602,7 +604,10 @@ export class ChatService {
       const city = match[1].trim();
       const country = match[2].trim();
       // Check if the second part looks like a country (not a date or other keyword)
-      if (!/\d{4}-\d{2}-\d{2}/.test(country) && !['from', 'to', 'on', 'at'].includes(country.toLowerCase())) {
+      if (
+        !/\d{4}-\d{2}-\d{2}/.test(country) &&
+        !['from', 'to', 'on', 'at', 'for', 'with', 'and', 'in'].includes(country.toLowerCase())
+      ) {
         return { city, country };
       }
     }

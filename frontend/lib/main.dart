@@ -71,11 +71,24 @@ class _HomePageState extends State<HomePage> {
 
   String? _pendingBookingQuery;
   bool? _awaitingTravelerCounts = false;
+  bool _awaitingHotelDateRetry = false;
+  bool _awaitingFlightDateRetry = false;
+  String? _lastFlightFrom;
+  String? _lastFlightTo;
+  String? _lastFlightDepartureDate;
   HotelSortMode _hotelSortMode = HotelSortMode.defaultOrder;
   HotelSortMode _flightSortMode = HotelSortMode.defaultOrder;
 
   String get base {
-    if (kIsWeb) return 'http://localhost:3000/api';
+    const configuredApiBase = String.fromEnvironment('API_BASE_URL');
+    if (configuredApiBase.isNotEmpty) return configuredApiBase;
+    if (kIsWeb) {
+      final host = Uri.base.host.toLowerCase();
+      if (host == 'localhost' || host == '127.0.0.1') {
+        return 'http://localhost:3000/api';
+      }
+      return 'https://routestack-backend.onrender.com/api';
+    }
     return 'http://10.0.2.2:3000/api';
   }
 
@@ -157,6 +170,7 @@ class _HomePageState extends State<HomePage> {
       if (cardsData['result'] != null && cardsData['result'] is List) {
         final results = cardsData['result'] as List;
         if (results.isNotEmpty) {
+          _awaitingFlightDateRetry = false;
           final reply = data['reply'] ??
               'I found ${cardsData['count'] ?? results.length} options for you:';
 
@@ -245,6 +259,7 @@ class _HomePageState extends State<HomePage> {
     if (data['cards'] != null &&
         data['cards'] is List &&
         data['cards'].isNotEmpty) {
+      _awaitingFlightDateRetry = false;
       final cards = data['cards'] as List;
       final reply = data['reply'] ?? 'Here are your options:';
 
@@ -312,6 +327,19 @@ class _HomePageState extends State<HomePage> {
 
     // Handle plain text replies
     String botReply = data['reply'] ?? "I couldn't find any results for that.";
+
+    final lowerReply = botReply.toLowerCase();
+    final noFlightsFound = lowerReply.contains('no flights found') ||
+        lowerReply.contains('no flight found') ||
+        lowerReply.contains('no flights available');
+    if (noFlightsFound && _lastFlightFrom != null && _lastFlightTo != null) {
+      _awaitingFlightDateRetry = true;
+      _bot(
+        '$botReply Please enter a new departure date and I will search again for $_lastFlightFrom to $_lastFlightTo.',
+      );
+      return;
+    }
+
     _bot(botReply);
   }
 
@@ -598,6 +626,37 @@ class _HomePageState extends State<HomePage> {
     return {'city': city, 'checkIn': checkIn, 'checkOut': checkOut};
   }
 
+  Map<String, String?> _extractFlightSearchParameters(String message) {
+    final normalizedMessage = _normalizeNaturalDatesInMessage(message);
+    String? from;
+    String? to;
+    String? departureDate;
+
+    final fromToRegex = RegExp(
+      r'\bfrom\s+([a-zA-Z][a-zA-Z\s.-]{1,40}?)\s+to\s+([a-zA-Z][a-zA-Z\s.-]{1,40}?)(?=(?:\s+(?:on|for|at|leaving|departing)\b)|$)',
+      caseSensitive: false,
+    );
+    final match = fromToRegex.firstMatch(normalizedMessage);
+    if (match != null) {
+      from = match.group(1)?.trim();
+      to = match.group(2)?.trim();
+    }
+
+    final dateRegex = RegExp(
+      r'\b(?:\d{4}-\d{2}-\d{2}|\d{1,2}/\d{1,2}/\d{4}|\d{1,2}(?:st|nd|rd|th)?\s+[a-zA-Z]+(?:\s+\d{4})?|[a-zA-Z]+\s+\d{1,2}(?:st|nd|rd|th)?(?:\s+\d{4})?)\b',
+      caseSensitive: false,
+    );
+    final dateMatch = dateRegex.firstMatch(normalizedMessage);
+    if (dateMatch != null) {
+      departureDate = _normalizeNaturalDate(
+        dateMatch.group(0)!,
+        defaultYear: DateTime.now().year,
+      );
+    }
+
+    return {'from': from, 'to': to, 'departureDate': departureDate};
+  }
+
   /// Try to format incomplete hotel search as complete query
   String? _tryFormatAsHotelSearch(String userMessage) {
     final params = _extractSearchParameters(userMessage);
@@ -644,6 +703,54 @@ class _HomePageState extends State<HomePage> {
 
     final normalizedText = _normalizeNaturalDatesInMessage(trimmed);
 
+    if (_awaitingHotelDateRetry && lastSearchCity != null) {
+      setState(() => messages.insert(0, ChatMessage(trimmed, fromUser: true)));
+      inputCtrl.clear();
+
+      final params = _extractSearchParameters(normalizedText);
+      final newCheckIn = params['checkIn'];
+      final newCheckOut = params['checkOut'];
+
+      if (newCheckIn == null || newCheckOut == null) {
+        _bot(
+          'Please enter both check-in and check-out dates so I can search again (example: 2026-05-10 to 2026-05-12).',
+        );
+        return;
+      }
+
+      lastSearchCheckIn = newCheckIn;
+      lastSearchCheckOut = newCheckOut;
+      _awaitingHotelDateRetry = false;
+      await _sendToBackend(
+        'Hotel in $lastSearchCity from $newCheckIn to $newCheckOut',
+      );
+      return;
+    }
+
+    if (_awaitingFlightDateRetry &&
+        _lastFlightFrom != null &&
+        _lastFlightTo != null) {
+      setState(() => messages.insert(0, ChatMessage(trimmed, fromUser: true)));
+      inputCtrl.clear();
+
+      final flightParams = _extractFlightSearchParameters(normalizedText);
+      final newDepartureDate = flightParams['departureDate'];
+
+      if (newDepartureDate == null) {
+        _bot(
+          'Please enter a new departure date so I can search flights again (example: 2026-05-10).',
+        );
+        return;
+      }
+
+      _lastFlightDepartureDate = newDepartureDate;
+      _awaitingFlightDateRetry = false;
+      await _sendToBackend(
+        'Flight from $_lastFlightFrom to $_lastFlightTo on $newDepartureDate',
+      );
+      return;
+    }
+
     if ((_awaitingTravelerCounts == true) && _pendingBookingQuery != null) {
       final travelerCounts = _extractTravelerCounts(normalizedText);
 
@@ -687,6 +794,15 @@ class _HomePageState extends State<HomePage> {
     final formattedMessage = _tryFormatAsHotelSearch(messageText);
     if (formattedMessage != null && formattedMessage != messageText) {
       userDisplayMessage = formattedMessage;
+    }
+
+    final flightParams = _extractFlightSearchParameters(userDisplayMessage);
+    if (flightParams['from'] != null && flightParams['to'] != null) {
+      _lastFlightFrom = flightParams['from'];
+      _lastFlightTo = flightParams['to'];
+      if (flightParams['departureDate'] != null) {
+        _lastFlightDepartureDate = flightParams['departureDate'];
+      }
     }
 
     setState(() => loading = true);
@@ -1379,9 +1495,14 @@ class _HomePageState extends State<HomePage> {
               : <dynamic>[]);
 
       if (hotels.isEmpty) {
-        _bot('No hotels found for the selected dates.');
+        _awaitingHotelDateRetry = true;
+        _bot(
+          'No hotels found for those dates. Please enter new check-in and check-out dates.',
+        );
         return;
       }
+
+      _awaitingHotelDateRetry = false;
 
       final token = resultMap['token']?.toString();
       final correlationId = resultMap['correlationId']?.toString();
@@ -3518,6 +3639,11 @@ class _HomePageState extends State<HomePage> {
 
       _pendingBookingQuery = null;
       _awaitingTravelerCounts = false;
+      _awaitingHotelDateRetry = false;
+      _awaitingFlightDateRetry = false;
+      _lastFlightFrom = null;
+      _lastFlightTo = null;
+      _lastFlightDepartureDate = null;
 
       lastSearchCity = null;
       lastSearchCheckIn = null;
