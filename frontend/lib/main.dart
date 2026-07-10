@@ -45,7 +45,7 @@ class RouteStackApp extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return MaterialApp(
-      title: 'RouteStack',
+      title: 'RouteStack AI',
       debugShowCheckedModeBanner: false,
       theme: ThemeData(
         primarySwatch: Colors.indigo,
@@ -108,7 +108,7 @@ class _HomePageState extends State<HomePage> {
     sessionId = Uuid().v4();
     bookingService = BookingService(baseUrl: base);
     _bot(
-      'Hi — I can help you book flights or hotels. Tap Plan hotel or Plan flight to pick dates and traveler counts.',
+      'Hi! I’m RouteStack AI, your travel copilot for flights and hotels. Try: “Book a hotel in Dubai” or “Plan a flight to Miami”.',
     );
   }
 
@@ -4520,7 +4520,7 @@ class _HomePageState extends State<HomePage> {
       lastRecommendationId = null;
     });
 
-    _bot('Hi — I can help you book flights or hotels. Try: "book a flight"');
+    _bot('Hi! I’m RouteStack AI, your travel copilot for flights and hotels. Try: “Book a flight” or “Plan a hotel stay”.');
   }
 
   @override
