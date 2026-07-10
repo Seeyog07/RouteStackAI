@@ -70,28 +70,28 @@ export class BookingsService {
       .trim();
     const mappedCode = this.locationMap[normalized] || this.locationMap[baseLocation];
     if (mappedCode) {
-      console.log(`[normalizeLocation] "${location}" → "${baseLocation}" → "${mappedCode}"`);
+      this.logger.debug('[normalizeLocation] %s → %s → %s', location, baseLocation, mappedCode);
       return mappedCode;
     }
 
     if (/^[a-z]{3}$/i.test(baseLocation)) {
       const code = baseLocation.toUpperCase();
-      console.log(`[normalizeLocation] "${location}" → "${baseLocation}" → "${code}"`);
+      this.logger.debug('[normalizeLocation] %s → %s → %s', location, baseLocation, code);
       return code;
     }
 
-    console.log(`[normalizeLocation] "${location}" → "${baseLocation}" → invalid`);
+    this.logger.debug('[normalizeLocation] %s → %s → invalid', location, baseLocation);
     return null;
   }
 
   // 1. Dynamic Flight Search
   async findFlights(from: string, to: string, departureDate?: string) {
-    console.log(`[findFlights] Input: from="${from}", to="${to}", date="${departureDate}"`);
+    this.logger.debug('[findFlights] Input: from="%s", to="%s", date="%s"', from, to, departureDate);
     
     const fromCode = this.normalizeLocation(from);
     const toCode = this.normalizeLocation(to);
 
-    console.log(`[findFlights] Codes: fromCode="${fromCode}", toCode="${toCode}"`);
+    this.logger.debug('[findFlights] Codes: fromCode="%s", toCode="%s"', fromCode, toCode);
 
     if (!fromCode || !toCode) {
       return {
@@ -117,7 +117,7 @@ export class BookingsService {
       body.departureDate = departureDate;
     }
     
-    console.log(`[findFlights] API Request body:`, JSON.stringify(body));
+    this.logger.debug('[findFlights] API Request body: %o', body);
     
     const res = await this.mcpRequest('/mcp/flight/search', body);
     this.logger.debug('Flight search response shape: %o', res.body);
@@ -310,7 +310,7 @@ export class BookingsService {
   async getRoomsAndRates(token: string, hotelId: string, checkIn?: string, checkOut?: string, rooms?: any[]) {
     // If no token, return empty result gracefully to avoid auth rate limiting
     if (!token || token.trim() === '') {
-      console.warn('[getRoomsAndRates] Skipping MCP call: token is empty');
+      this.logger.warn('[getRoomsAndRates] Skipping MCP call: token is empty');
       return { body: { success: true, result: { rooms: [] }, message: 'No token provided' } };
     }
 
@@ -382,49 +382,41 @@ export class BookingsService {
       this.logger.error('MCP Credentials missing in environment');
       throw new InternalServerErrorException('MCP Credentials missing in environment');
     }
-  const AUTH_BASE_URL = authBaseUrl || BASE_URL;
-  const apiKey = process.env.MCP_API_KEY;
-  const apiSecret = process.env.MCP_API_SECRET;
 
-  if (!apiSecret || !apiKey || !BASE_URL) {
-    console.error('CRITICAL: Environment variables are missing!');
-    throw new InternalServerErrorException('MCP Credentials missing in environment');
-  }
+    const resolvedApiKey = apiKey as string;
+    const resolvedApiSecret = apiSecret as string;
+    const resolvedBaseUrl = BASE_URL as string;
+    const resolvedAuthBaseUrl = AUTH_BASE_URL as string;
 
-  const resolvedApiKey = apiKey as string;
-  const resolvedApiSecret = apiSecret as string;
-  const resolvedBaseUrl = BASE_URL as string;
-  const resolvedAuthBaseUrl = AUTH_BASE_URL as string;
+    try {
+      const token = await this.getPartnerToken(resolvedApiKey, resolvedApiSecret, resolvedAuthBaseUrl, resolvedBaseUrl);
 
-  try {
-    const token = await this.getPartnerToken(resolvedApiKey, resolvedApiSecret, resolvedAuthBaseUrl, resolvedBaseUrl);
-
-    let dataRes = await (globalThis as any).fetch(`${resolvedBaseUrl}${path}`, {
-      method: 'POST',
-      headers: this.buildMcpAuthHeaders(token, resolvedApiKey),
-      body: JSON.stringify(body),
-    });
-
-    if (dataRes.status === 401 || dataRes.status === 403) {
-      this.logger.warn('MCP data request unauthorized, refreshing partner token and retrying once.');
-      this.invalidatePartnerToken(resolvedBaseUrl, resolvedAuthBaseUrl, resolvedApiKey);
-      const refreshedToken = await this.getPartnerToken(resolvedApiKey, resolvedApiSecret, resolvedAuthBaseUrl, resolvedBaseUrl);
-      dataRes = await (globalThis as any).fetch(`${resolvedBaseUrl}${path}`, {
+      let dataRes = await (globalThis as any).fetch(`${resolvedBaseUrl}${path}`, {
         method: 'POST',
-        headers: this.buildMcpAuthHeaders(refreshedToken, resolvedApiKey),
+        headers: this.buildMcpAuthHeaders(token, resolvedApiKey),
         body: JSON.stringify(body),
       });
+
+      if (dataRes.status === 401 || dataRes.status === 403) {
+        this.logger.warn('MCP data request unauthorized, refreshing partner token and retrying once.');
+        this.invalidatePartnerToken(resolvedBaseUrl, resolvedAuthBaseUrl, resolvedApiKey);
+        const refreshedToken = await this.getPartnerToken(resolvedApiKey, resolvedApiSecret, resolvedAuthBaseUrl, resolvedBaseUrl);
+        dataRes = await (globalThis as any).fetch(`${resolvedBaseUrl}${path}`, {
+          method: 'POST',
+          headers: this.buildMcpAuthHeaders(refreshedToken, resolvedApiKey),
+          body: JSON.stringify(body),
+        });
+      }
+
+      const data = await dataRes.json();
+      this.logger.debug('MCP response status: %d', dataRes.status);
+
+      return { status: dataRes.status, body: data };
+    } catch (e) {
+      const errorMessage = e instanceof Error ? e.message : 'MCP Request failed';
+      this.logger.error('MCP Request Exception: %s', errorMessage);
+      throw new InternalServerErrorException(errorMessage);
     }
-
-    const data = await dataRes.json();
-    this.logger.debug('MCP response status: %d', dataRes.status);
-
-    return { status: dataRes.status, body: data };
-  } catch (e) {
-    const errorMessage = e instanceof Error ? e.message : 'MCP Request failed';
-    console.error('MCP Request Exception:', errorMessage);
-    throw new InternalServerErrorException(errorMessage);
-  }
 }
 
   private invalidatePartnerToken(baseUrl: string, authBaseUrl: string, apiKey: string) {
@@ -480,7 +472,7 @@ export class BookingsService {
         this.logger.error('Auth step failed: %s %s', authRes.status, errorText);
 
         if (this.partnerTokenCache && this.partnerTokenCache.expiresAt > Date.now()) {
-          console.warn('Auth failed, using cached partner token.');
+          this.logger.warn('Auth failed, using cached partner token.');
           return this.partnerTokenCache.token;
         }
 

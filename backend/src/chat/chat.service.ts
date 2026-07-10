@@ -790,7 +790,7 @@ export class ChatService {
 
           return { reply: `Cancellation response for ${bookingId}: ${JSON.stringify(body, null, 2)}` };
         } catch (err) {
-          console.error('Cancel booking error', err);
+          this.logger.error('Cancel booking error: %o', err);
           return { reply: `Could not cancel booking ${bookingId}.` };
         }
       }
@@ -1142,7 +1142,7 @@ export class ChatService {
       }
 
       // Log current session data
-      console.log(`[Flight Booking] Session data before validation:`, {
+      this.logger.debug('[Flight Booking] Session data before validation: %o', {
         from: sess.from,
         to: sess.to,
         departureDate: sess.departureDate,
@@ -1151,13 +1151,13 @@ export class ChatService {
       // Validate
       const validationError = this.validateFlightData(sess);
       if (validationError) {
-        console.log(`[Flight Booking] Validation error: ${validationError}`);
+        this.logger.warn('[Flight Booking] Validation error: %s', validationError);
         return { reply: validationError };
       }
 
       // All data collected - search flights
       sess.state = 'searching_flights';
-      console.log(`[Flight Booking] All data present. Searching flights with:`, {
+      this.logger.debug('[Flight Booking] All data present. Searching flights with: %o', {
         from: sess.from,
         to: sess.to,
         departureDate: sess.departureDate,
@@ -1174,12 +1174,12 @@ export class ChatService {
           if ((flightResponse as any).invalidFrom) {
             sess.from = undefined;
             sess.lastResults = [];
-            console.log(`[Flight Booking] Cleared sess.from due to invalid location`);
+            this.logger.debug('[Flight Booking] Cleared sess.from due to invalid location');
           }
           if ((flightResponse as any).invalidTo) {
             sess.to = undefined;
             sess.lastResults = [];
-            console.log(`[Flight Booking] Cleared sess.to due to invalid location`);
+            this.logger.debug('[Flight Booking] Cleared sess.to due to invalid location');
           }
           return {
             reply:

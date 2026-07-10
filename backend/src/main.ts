@@ -15,7 +15,8 @@ async function bootstrap() {
   app.useGlobalPipes(new ValidationPipe({ whitelist: true, transform: true }));
   const port = Number(process.env.PORT ?? 3000);
   await app.listen(port);
-  console.log(`Backend listening on http://localhost:${port} (CORS enabled)`);
+  const logger = app.get('Logger');
+  logger.log(`Backend listening on http://localhost:${port} (CORS enabled)`);
 }
 
 bootstrap();

@@ -1,4 +1,4 @@
-import { Body, Controller, Get, Post, HttpCode, HttpStatus, Query, BadRequestException, Res, HttpException } from '@nestjs/common';
+import { Body, Controller, Get, Post, HttpCode, HttpStatus, Query, BadRequestException, Res, HttpException, Logger } from '@nestjs/common';
 import { Response } from 'express';
 import { BookingsService } from './bookings.service';
 import { CreateBookingDto } from './dto/create-booking.dto';
@@ -6,6 +6,8 @@ import { SearchHotelsDto } from './dto/search-hotels.dto';
 
 @Controller()
 export class BookingsController {
+  private readonly logger = new Logger(BookingsController.name);
+
   constructor(private readonly service: BookingsService) {}
 
   // 1. UPDATED: Now async and accepts origin/destination for dynamic MCP search
@@ -39,7 +41,7 @@ export class BookingsController {
 
   @Post('mcp/hotel/search-hotels')
   async proxySearchHotels(@Body() body: any) {
-    console.log('[proxySearchHotels] request received');
+    this.logger.debug('[proxySearchHotels] request received');
     const res = await this.service.searchHotels(body);
     return res.body;
   }
@@ -52,7 +54,7 @@ export class BookingsController {
 
   @Post('mcp/hotel/get-rooms-and-rates')
   async proxyGetRoomsAndRates(@Body() body: { token: string; hotelId: string; checkIn?: string; checkOut?: string; rooms?: any[] }) {
-    console.log('[proxyGetRoomsAndRates] request received');
+    this.logger.debug('[proxyGetRoomsAndRates] request received');
     const res = await this.service.getRoomsAndRates(body.token, body.hotelId, body.checkIn, body.checkOut, body.rooms);
     return res.body;
   }
@@ -129,7 +131,7 @@ export class BookingsController {
       const buffer = Buffer.from(await fetched.arrayBuffer());
       res.send(buffer);
     } catch (error) {
-      console.error('image-proxy error:', error);
+      this.logger.error('image-proxy error: %o', error);
       throw new HttpException('Image proxy error', HttpStatus.BAD_GATEWAY);
     }
   }
