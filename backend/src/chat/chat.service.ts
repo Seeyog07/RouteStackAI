@@ -1,4 +1,4 @@
-import { Injectable } from '@nestjs/common';
+import { Injectable, Logger } from '@nestjs/common';
 import { BookingsService } from '../bookings/bookings.service';
 
 interface ConversationTurn {
@@ -45,6 +45,7 @@ interface LlmInterpretation {
 
 @Injectable()
 export class ChatService {
+  private readonly logger = new Logger(ChatService.name);
   private sessions: Map<string, SessionData> = new Map();
 
   constructor(private readonly bookingsService: BookingsService) {}
@@ -98,6 +99,26 @@ export class ChatService {
     return sess.history
       .slice(-turns)
       .map((h) => ({ role: h.role, text: h.text.slice(0, 180) }));
+  }
+
+  private isAffirmative(text: string): boolean {
+    return /\b(yes|yeah|yep|sure|okay|ok)\b/i.test(text);
+  }
+
+  private isNegative(text: string): boolean {
+    return /\b(no|nope|nah|not now|stop|thanks?)\b/i.test(text);
+  }
+
+  private isBookingResetRequest(text: string): boolean {
+    return /\b(?:another|again|new)\b/i.test(text) && /\b(?:booking|search|trip|hotel|flight)\b/i.test(text);
+  }
+
+  private resetSession(sessionId: string): void {
+    this.sessions.set(sessionId, {
+      state: 'idle',
+      bookingType: undefined,
+      history: [],
+    });
   }
 
   private normalizeIsoDate(value?: string | null): string | undefined {
@@ -311,7 +332,7 @@ export class ChatService {
       });
 
       if (!response.ok) {
-        console.warn(`[LLM] inference request failed: ${response.status}`);
+        this.logger.warn(`[LLM] inference request failed: ${response.status}`);
         return null;
       }
 
@@ -321,11 +342,11 @@ export class ChatService {
 
       const interpretation = this.sanitizeLlmInterpretation(this.parseLlmJson(content));
       if (!interpretation) return null;
-      console.log('[LLM] sanitized interpretation:', JSON.stringify(interpretation));
+      this.logger.debug('[LLM] sanitized interpretation: %s', JSON.stringify(interpretation));
 
       return interpretation;
     } catch (error) {
-      console.warn('[LLM] inference failed:', error);
+      this.logger.warn('[LLM] inference failed', error);
       return null;
     }
   }
@@ -574,7 +595,7 @@ export class ChatService {
     if (match) {
       const from = this.sanitizeLocationCandidate(match[1].trim());
       const to = this.sanitizeLocationCandidate(match[2].trim());
-      console.log('[extractLocations] Pattern 1 matched:', from, '→', to);
+      this.logger.debug('[extractLocations] Pattern 1 matched: %s → %s', from, to);
       return { from, to };
     }
 
@@ -587,12 +608,12 @@ export class ChatService {
       if (!['talk', 'speak', 'say', 'tell', 'listen'].includes(firstPart)) {
         const from = this.sanitizeLocationCandidate(match[1].trim());
         const to = this.sanitizeLocationCandidate(match[2].trim());
-        console.log('[extractLocations] Pattern 2 matched:', from, '→', to);
+        this.logger.debug('[extractLocations] Pattern 2 matched: %s → %s', from, to);
         return { from, to };
       }
     }
 
-    console.log('[extractLocations] No patterns matched. Input:', text);
+    this.logger.debug('[extractLocations] No patterns matched. Input: %s', text);
     return {};
   }
 
@@ -869,28 +890,24 @@ export class ChatService {
         const resp = await this.bookingsService.revalidateHotel(token, recommendationId, sess.choice.hotelId);
         return { reply: `Hotel revalidate response: ${JSON.stringify(resp, null, 2)}` };
       } catch (err) {
-        console.error('Hotel revalidation error', err);
+        this.logger.error('Hotel revalidation error', err);
         return { reply: 'Could not revalidate hotel right now.' };
       }
     }
 
     // --- STEP 0: POST-BOOKING COMPLETION YES/NO ---
     if (sess.state === 'completed') {
-      const noPattern = /\b(no|nope|nah|not now|not anymore|stop|thanks?)\b/i;
-      const yesPattern = /\b(yes|yeah|yep|sure|okay|ok)\b/i;
-
-      if (noPattern.test(originalMessage)) {
-        this.sessions.set(sessionId, { state: 'idle', bookingType: undefined });
+      if (this.isNegative(originalMessage)) {
+        this.resetSession(sessionId);
         return { reply: 'Thank you! If you need more help later, I am here for you. Have a great day!' };
       }
 
-      if (yesPattern.test(originalMessage)) {
-        this.sessions.set(sessionId, { state: 'idle', bookingType: undefined });
+      if (this.isAffirmative(originalMessage)) {
+        this.resetSession(sessionId);
         return { reply: 'Great! Would you like to book a flight or a hotel?' };
       }
 
-      // If user says something else in completed state, gently ask what they want next.
-      return { reply: 'Would you like to book another flight or hotel? (yes/no)' };
+      return { reply: 'Would you like to start a new booking? (yes/no)' };
     }
 
     // --- STEP 1: IDENTIFY BOOKING TYPE (if not set) ---
@@ -980,7 +997,7 @@ export class ChatService {
             reply: `Excellent choice! Fare revalidated to ${revalidate.result?.pricing?.showOurprice ?? revalidate.result?.pricing?.ourprice}. Who should I book this for? (full name)`,
           };
         } catch (error) {
-          console.error('Flight revalidation error:', error);
+          this.logger.error('Flight revalidation error:', error);
           return { reply: 'Could not revalidate your selected flight right now. Please try again.' };
         }
       }
@@ -1012,7 +1029,7 @@ export class ChatService {
             // ],
           };
         } catch (error) {
-          console.error('Hotel details/rates error:', error);
+          this.logger.error('Hotel details/rates error:', error);
           sess.choice = selected;
           sess.state = 'awaiting_name';
           return {
@@ -1054,7 +1071,7 @@ export class ChatService {
           booking,
         };
       } catch (error) {
-        console.error('Booking creation error:', error);
+        this.logger.error('Booking creation error:', error);
         sess.state = 'error';
         return {
           reply: 'Sorry, there was an error creating your booking. Please try again.',
@@ -1066,11 +1083,11 @@ export class ChatService {
     if (sess.bookingType === 'flight') {
       // Extract locations
       const { from, to } = this.extractLocations(originalMessage);
-      console.log(`[Flight Booking] Extracted locations: from="${from}", to="${to}"`);
+      this.logger.debug('[Flight Booking] Extracted locations: from="%s", to="%s"', from, to);
       if (from) sess.from = from;
       if (to) sess.to = to;
 
-      // Single-city follow-up messages can fill missing route parts.
+      // Single-city follow-up messages can fill missing or cleared route parts.
       if (!from && !to) {
         const trimmed = originalMessage.trim();
         if (
@@ -1080,15 +1097,17 @@ export class ChatService {
         ) {
           if (!sess.from) {
             sess.from = trimmed;
+            this.logger.debug('[Flight Booking] Filled missing from with single-word: %s', trimmed);
           } else if (!sess.to) {
             sess.to = trimmed;
+            this.logger.debug('[Flight Booking] Filled missing to with single-word: %s', trimmed);
           }
         }
       }
 
       // Extract departure date
       const dates = this.extractDates(originalMessage);
-      console.log(`[Flight Booking] Extracted dates:`, dates);
+      this.logger.debug('[Flight Booking] Extracted dates: %o', dates);
 
       if (this.hasPotentialDateMention(originalMessage) && dates.length === 0) {
         return {
@@ -1150,6 +1169,25 @@ export class ChatService {
           sess.departureDate!,
         );
 
+        if (flightResponse && typeof flightResponse === 'object' && (flightResponse as any).success === false) {
+          sess.state = 'idle';
+          if ((flightResponse as any).invalidFrom) {
+            sess.from = undefined;
+            sess.lastResults = [];
+            console.log(`[Flight Booking] Cleared sess.from due to invalid location`);
+          }
+          if ((flightResponse as any).invalidTo) {
+            sess.to = undefined;
+            sess.lastResults = [];
+            console.log(`[Flight Booking] Cleared sess.to due to invalid location`);
+          }
+          return {
+            reply:
+              (flightResponse as any).message ||
+              'Please provide a valid departure city or airport and destination city or airport.',
+          };
+        }
+
         const flightItems = (flightResponse && Array.isArray((flightResponse as any).result))
           ? (flightResponse as any).result
           : [];
@@ -1164,7 +1202,7 @@ export class ChatService {
         };
       } catch (error) {
         sess.state = 'error';
-        console.error('Flight search error:', error);
+        this.logger.error('Flight search error:', error);
         return {
           reply: `Sorry, I couldn't find flights from ${sess.from} to ${sess.to}. Please try again or choose different cities.`,
         };
@@ -1308,112 +1346,11 @@ export class ChatService {
         };
       } catch (error) {
         sess.state = 'error';
-        console.error('Hotel search error:', error);
+        this.logger.error('Hotel search error:', error);
         return {
           reply: `Sorry, I couldn't find hotels in ${sess.city} for those dates. Please try different dates or cities.`,
         };
       }
-    }
-
-    // --- STEP 4: HANDLE SELECTION ---
-    if (text.startsWith('select:')) {
-      const itemId = text.replace('select:', '').trim();
-      const selected = sess.lastResults?.find(
-        (item) => item?.fareSourceCode === itemId || item?.id === itemId,
-      );
-
-      if (selected) {
-        // Revalidate selected flight with the MCP endpoint
-        if (sess.bookingType === 'flight') {
-          const fareSourceCode = selected.fareSourceCode || selected.id;
-          const key0 = Number(selected.coin ?? selected.showOurprice ?? selected.totalFare ?? 0);
-
-          try {
-            const revalidate = await this.bookingsService.revalidateFlight(fareSourceCode, key0);
-            if (!revalidate?.success) {
-              return { reply: `Sorry, flight revalidation failed: ${revalidate?.message ?? 'Unknown error'}.` };
-            }
-
-            // Store choice with revalidation result
-            sess.choice = { ...selected, revalidate: revalidate.result };
-            sess.state = 'awaiting_name';
-
-            return {
-              reply: `Excellent choice! Flight fare is valid. Final price is ${revalidate.result?.pricing?.showOurprice ?? revalidate.result?.pricing?.ourprice}. Who should I book this for (full name)?`,
-            };
-          } catch (error) {
-            console.error('Flight revalidation error:', error);
-            return { reply: 'Could not revalidate your selected flight right now. Please try again.' };
-          }
-        }
-
-        // Non-flight path (hotels) or no revalidation needed
-        sess.choice = selected;
-        sess.state = 'awaiting_name';
-        return {
-          reply: `Excellent choice! ${selected?.name ?? 'Selected item'} is a great option. Now, who should I book this for? (Please provide your full name)`,
-        };
-      }
-
-      return { reply: "I couldn't find that option. Please select from the list above." };
-    }
-
-    // --- STEP 5: HANDLE NUMBER SELECTION (from card UI) ---
-    const selectMatch = text.match(/^(?:select|choose|pick|#|number)\s*(\d+)/i);
-    if (selectMatch && sess.lastResults?.length) {
-      const idx = parseInt(selectMatch[1], 10) - 1;
-      const selected = sess.lastResults[idx];
-
-      if (selected && idx >= 0) {
-        sess.choice = selected;
-        sess.state = 'awaiting_name';
-        return {
-          reply: `Perfect! You selected ${selected.name}. Who should I book this for? (Your full name)`,
-        };
-      }
-
-      return { reply: `Please select a number between 1 and ${sess.lastResults.length}.` };
-    }
-
-    // --- STEP 7: POST-BOOKING YES/NO CONTROL ---
-    if (sess.state === 'completed') {
-      if (text === 'no' || text === 'nope' || text === 'nah' || text === 'not now') {
-        this.sessions.set(sessionId, {
-          state: 'idle',
-          bookingType: undefined,
-        });
-        return {
-          reply: 'Thank you! If you need more help later, I am here for you. Have a great day!',
-        };
-      }
-      if (
-        (text.includes('another') &&
-          (text.includes('booking') || text.includes('search') || text.includes('again'))) ||
-        text === 'yes'
-      ) {
-        this.sessions.set(sessionId, {
-          state: 'idle',
-          bookingType: undefined,
-        });
-        return {
-          reply: 'Great! Would you like to book a flight or a hotel?',
-        };
-      }
-    }
-
-    // --- STEP 8: RESET FOR NEW BOOKING (general) ---
-    if (
-      (text.includes('another') &&
-        (text.includes('booking') || text.includes('search') || text.includes('again'))) ||
-      text === 'yes'
-    ) {
-      this.sessions.set(sessionId, {
-        state: 'idle',
-        bookingType: undefined,
-      });
-      return {
-        reply: 'Great! Would you like to book a flight or a hotel?',
-      };
     }
 
     // --- FALLBACK ---

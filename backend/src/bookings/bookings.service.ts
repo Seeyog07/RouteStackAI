@@ -1,4 +1,4 @@
-import { Injectable, InternalServerErrorException } from '@nestjs/common';
+import { Injectable, InternalServerErrorException, Logger } from '@nestjs/common';
 import { CreateBookingDto } from './dto/create-booking.dto';
 import * as crypto from 'crypto';
 
@@ -6,6 +6,7 @@ type SearchBody = { city: string; checkIn: string; checkOut: string };
 
 @Injectable()
 export class BookingsService {
+  private readonly logger = new Logger(BookingsService.name);
   private bookings: any[] = [];
   private partnerTokenCache: {
     token: string;
@@ -60,11 +61,27 @@ export class BookingsService {
     'johannesburg': 'JNB',
   };
 
-  private normalizeLocation(location: string): string {
+  private normalizeLocation(location: string): string | null {
     const normalized = location.toLowerCase().trim();
-    const code = this.locationMap[normalized] || normalized.toUpperCase();
-    console.log(`[normalizeLocation] "${location}" → "${normalized}" → "${code}"`);
-    return code;
+    const baseLocation = normalized
+      .replace(/\s*\([^)]*\)\s*$/g, '')
+      .split(',')[0]
+      .split(' - ')[0]
+      .trim();
+    const mappedCode = this.locationMap[normalized] || this.locationMap[baseLocation];
+    if (mappedCode) {
+      console.log(`[normalizeLocation] "${location}" → "${baseLocation}" → "${mappedCode}"`);
+      return mappedCode;
+    }
+
+    if (/^[a-z]{3}$/i.test(baseLocation)) {
+      const code = baseLocation.toUpperCase();
+      console.log(`[normalizeLocation] "${location}" → "${baseLocation}" → "${code}"`);
+      return code;
+    }
+
+    console.log(`[normalizeLocation] "${location}" → "${baseLocation}" → invalid`);
+    return null;
   }
 
   // 1. Dynamic Flight Search
@@ -75,6 +92,21 @@ export class BookingsService {
     const toCode = this.normalizeLocation(to);
 
     console.log(`[findFlights] Codes: fromCode="${fromCode}", toCode="${toCode}"`);
+
+    if (!fromCode || !toCode) {
+      return {
+        success: false,
+        code: 'INVALID_LOCATION',
+        invalidFrom: !fromCode,
+        invalidTo: !toCode,
+        message:
+          !fromCode && !toCode
+            ? 'Please provide both a departure city or airport and a destination city or airport. For example: London to Miami.'
+            : !fromCode
+              ? `I could not recognize "${from}" as a valid departure city or airport. Please provide a city or 3-letter airport code.`
+              : `I could not recognize "${to}" as a valid destination city or airport. Please provide a city or 3-letter airport code.`,
+      };
+    }
 
     // Try with origin / destination (RouteStack likely uses these)
     const body: any = { 
@@ -88,7 +120,7 @@ export class BookingsService {
     console.log(`[findFlights] API Request body:`, JSON.stringify(body));
     
     const res = await this.mcpRequest('/mcp/flight/search', body);
-    console.log("Checking flights:", res.body);
+    this.logger.debug('Flight search response shape: %o', res.body);
     return res.body;
   }
 
@@ -124,7 +156,7 @@ export class BookingsService {
     // Widen hotel result processed shape for downstream handling.
     const hotelBody = hotelRes?.body ?? hotelRes;
     if (hotelBody?.success === false) {
-      console.warn('[findHotels] Hotel API returned failure', hotelBody);
+      this.logger.warn('[findHotels] Hotel API returned failure %o', hotelBody);
       return hotelBody;
     }
 
@@ -136,7 +168,7 @@ export class BookingsService {
       hotels.forEach((hotel: any) => {
         hotel.token = token;
       });
-      console.log(`[findHotels] Attached token to ${hotels.length} hotels`);
+      this.logger.debug('Attached token to %d hotels', hotels.length);
     }
 
     return hotelBody;
@@ -337,16 +369,19 @@ export class BookingsService {
 
   // 6. Private Helper for MCP API Calls
   private async mcpRequest(path: string, body: any, baseUrl?: string, authBaseUrl?: string) {
-  // 1. Log Environment Variables at the start
-  console.log('--- MCP Debug Start ---');
-  console.log('BASE_URL:', baseUrl || process.env.MCP_BASE_URL);
-  console.log('AUTH_BASE_URL:', authBaseUrl || baseUrl || process.env.MCP_BASE_URL);
-  console.log('API_KEY:', process.env.MCP_API_KEY ? '✅ Loaded' : '❌ MISSING');
-  console.log('API_SECRET:', process.env.MCP_API_SECRET ? '✅ Loaded' : '❌ MISSING');
-  console.log('Request Path:', path);
-  console.log('Request Body:', JSON.stringify(body));
+    const BASE_URL = baseUrl || process.env.MCP_BASE_URL;
+    const AUTH_BASE_URL = authBaseUrl || BASE_URL;
+    const apiKey = process.env.MCP_API_KEY;
+    const apiSecret = process.env.MCP_API_SECRET;
 
-  const BASE_URL = baseUrl || process.env.MCP_BASE_URL;
+    this.logger.debug('MCP request %s to %s with auth base %s', path, BASE_URL, AUTH_BASE_URL);
+    this.logger.debug('MCP auth key loaded: %s, secret loaded: %s', apiKey ? 'yes' : 'no', apiSecret ? 'yes' : 'no');
+    this.logger.debug('MCP request body: %o', body);
+
+    if (!apiSecret || !apiKey || !BASE_URL) {
+      this.logger.error('MCP Credentials missing in environment');
+      throw new InternalServerErrorException('MCP Credentials missing in environment');
+    }
   const AUTH_BASE_URL = authBaseUrl || BASE_URL;
   const apiKey = process.env.MCP_API_KEY;
   const apiSecret = process.env.MCP_API_SECRET;
@@ -371,7 +406,7 @@ export class BookingsService {
     });
 
     if (dataRes.status === 401 || dataRes.status === 403) {
-      console.warn('MCP data request unauthorized, refreshing partner token and retrying once.');
+      this.logger.warn('MCP data request unauthorized, refreshing partner token and retrying once.');
       this.invalidatePartnerToken(resolvedBaseUrl, resolvedAuthBaseUrl, resolvedApiKey);
       const refreshedToken = await this.getPartnerToken(resolvedApiKey, resolvedApiSecret, resolvedAuthBaseUrl, resolvedBaseUrl);
       dataRes = await (globalThis as any).fetch(`${resolvedBaseUrl}${path}`, {
@@ -382,8 +417,7 @@ export class BookingsService {
     }
 
     const data = await dataRes.json();
-    console.log('MCP Response Status:', dataRes.status);
-    console.log('--- MCP Debug End ---');
+    this.logger.debug('MCP response status: %d', dataRes.status);
 
     return { status: dataRes.status, body: data };
   } catch (e) {
@@ -433,7 +467,7 @@ export class BookingsService {
         .update(`${apiKey}:${ts}:${nonce}`)
         .digest('base64url');
 
-      console.log('Generated HMAC:', hmac);
+      this.logger.debug('Generated auth challenge for partner-token request');
 
       const authRes = await (globalThis as any).fetch(`${authBaseUrl}/mcp/auth/partner-token`, {
         method: 'POST',
@@ -443,7 +477,7 @@ export class BookingsService {
 
       if (!authRes.ok) {
         const errorText = await authRes.text();
-        console.error(`Auth Step Failed: ${authRes.status}`, errorText);
+        this.logger.error('Auth step failed: %s %s', authRes.status, errorText);
 
         if (this.partnerTokenCache && this.partnerTokenCache.expiresAt > Date.now()) {
           console.warn('Auth failed, using cached partner token.');
@@ -454,7 +488,7 @@ export class BookingsService {
       }
 
       const authBody = await authRes.json();
-      console.log('Auth Response Keys:', Object.keys(authBody || {}));
+      this.logger.debug('Auth response keys: %o', Object.keys(authBody || {}));
       const token = this.extractPartnerToken(authBody);
 
       if (!token) {
@@ -469,7 +503,7 @@ export class BookingsService {
         apiKey,
       };
 
-      console.log('Auth Token Received: ✅');
+      this.logger.debug('Auth token received successfully');
       return token;
     })();
 

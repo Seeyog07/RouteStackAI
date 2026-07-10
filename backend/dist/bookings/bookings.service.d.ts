@@ -5,6 +5,8 @@ export declare class BookingsService {
     private partnerTokenRequest;
     private locationMap;
     private normalizeLocation;
+    private titleCaseLocation;
+    private suggestLocations;
     findFlights(from: string, to: string, departureDate?: string): Promise<any>;
     findHotels(city: string, checkIn: string, checkOut: string, adults?: number, children?: number): Promise<any>;
     searchDestinations(query: string): Promise<{
@@ -91,4 +93,7 @@ export declare class BookingsService {
     private mcpRequest;
     private invalidatePartnerToken;
     private getPartnerToken;
+    private buildMcpAuthHeaders;
+    private normalizePartnerToken;
+    private extractPartnerToken;
 }

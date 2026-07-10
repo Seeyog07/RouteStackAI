@@ -38,6 +38,8 @@ export declare class ChatService {
     handleMessage(sessionId: string, message: string): Promise<{
         reply: string;
         booking?: undefined;
+        suggestions?: undefined;
+        suggestionField?: undefined;
         cards?: undefined;
         sessionId?: undefined;
         checkIn?: undefined;
@@ -52,6 +54,17 @@ export declare class ChatService {
             details?: string;
             id: string;
         };
+        suggestions?: undefined;
+        suggestionField?: undefined;
+        cards?: undefined;
+        sessionId?: undefined;
+        checkIn?: undefined;
+        checkOut?: undefined;
+    } | {
+        reply: any;
+        suggestions: any;
+        suggestionField: string;
+        booking?: undefined;
         cards?: undefined;
         sessionId?: undefined;
         checkIn?: undefined;
@@ -60,6 +73,8 @@ export declare class ChatService {
         reply: string;
         cards: any;
         booking?: undefined;
+        suggestions?: undefined;
+        suggestionField?: undefined;
         sessionId?: undefined;
         checkIn?: undefined;
         checkOut?: undefined;
@@ -70,5 +85,7 @@ export declare class ChatService {
         checkOut: string;
         cards: any;
         booking?: undefined;
+        suggestions?: undefined;
+        suggestionField?: undefined;
     }>;
 }

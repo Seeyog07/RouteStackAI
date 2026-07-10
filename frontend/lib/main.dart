@@ -1,4 +1,5 @@
 import 'dart:convert';
+import 'dart:async';
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
@@ -15,6 +16,27 @@ enum HotelSortMode {
   defaultOrder,
   priceLowToHigh,
   priceHighToLow,
+}
+
+enum TripPlannerType {
+  hotel,
+  flight,
+}
+
+class LocationSuggestion {
+  final String label;
+  final String value;
+  final String? destinationId;
+  final String? country;
+  final String? state;
+
+  const LocationSuggestion({
+    required this.label,
+    required this.value,
+    this.destinationId,
+    this.country,
+    this.state,
+  });
 }
 
 void main() => runApp(RouteStackApp());
@@ -68,27 +90,15 @@ class _HomePageState extends State<HomePage> {
   String? lastDestinationCode;
   String? lastToken;
   String? lastRecommendationId;
+  String? lastCorrelationId;
 
   String? _pendingBookingQuery;
   bool? _awaitingTravelerCounts = false;
-  bool _awaitingHotelDateRetry = false;
-  bool _awaitingFlightDateRetry = false;
-  String? _lastFlightFrom;
-  String? _lastFlightTo;
-  String? _lastFlightDepartureDate;
   HotelSortMode _hotelSortMode = HotelSortMode.defaultOrder;
   HotelSortMode _flightSortMode = HotelSortMode.defaultOrder;
 
   String get base {
-    const configuredApiBase = String.fromEnvironment('API_BASE_URL');
-    if (configuredApiBase.isNotEmpty) return configuredApiBase;
-    if (kIsWeb) {
-      final host = Uri.base.host.toLowerCase();
-      if (host == 'localhost' || host == '127.0.0.1') {
-        return 'http://localhost:3000/api';
-      }
-      return 'https://routestack-backend.onrender.com/api';
-    }
+    if (kIsWeb) return 'http://localhost:3000/api';
     return 'http://10.0.2.2:3000/api';
   }
 
@@ -97,7 +107,9 @@ class _HomePageState extends State<HomePage> {
     super.initState();
     sessionId = Uuid().v4();
     bookingService = BookingService(baseUrl: base);
-    _bot('Hi — I can help you book flights or hotels. Try: "book a flight"');
+    _bot(
+      'Hi — I can help you book flights or hotels. Tap Plan hotel or Plan flight to pick dates and traveler counts.',
+    );
   }
 
   @override
@@ -112,6 +124,23 @@ class _HomePageState extends State<HomePage> {
 
   void _bot(String text) {
     setState(() => messages.insert(0, ChatMessage(text, fromUser: false)));
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      _scrollToBottom(animated: true);
+    });
+  }
+
+  void _scrollToBottom({bool animated = true}) {
+    if (!_chatScrollController.hasClients) return;
+    final target = _chatScrollController.position.minScrollExtent;
+    if (animated) {
+      _chatScrollController.animateTo(
+        target,
+        duration: const Duration(milliseconds: 250),
+        curve: Curves.easeOut,
+      );
+    } else {
+      _chatScrollController.jumpTo(target);
+    }
   }
 
   void _copyChatText(String text) {
@@ -142,6 +171,776 @@ class _HomePageState extends State<HomePage> {
     });
   }
 
+  Widget _buildPlannerActionButton({
+    required IconData icon,
+    required String title,
+    required String subtitle,
+    required VoidCallback onPressed,
+  }) {
+    return Expanded(
+      child: ElevatedButton(
+        onPressed: onPressed,
+        style: ElevatedButton.styleFrom(
+          backgroundColor: Colors.white,
+          foregroundColor: const Color(0xFF1e3c72),
+          elevation: 0,
+          padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 12),
+          shape:
+              RoundedRectangleBorder(borderRadius: BorderRadius.circular(18)),
+        ),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Icon(icon, size: 18),
+            const SizedBox(height: 4),
+            Text(
+              title,
+              textAlign: TextAlign.center,
+              style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w700),
+            ),
+            const SizedBox(height: 2),
+            Text(
+              subtitle,
+              textAlign: TextAlign.center,
+              style: TextStyle(
+                fontSize: 10,
+                color: const Color(0xFF1e3c72).withOpacity(0.75),
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  String _formatPlannerDate(DateTime date) {
+    return '${date.year}-${date.month.toString().padLeft(2, '0')}-${date.day.toString().padLeft(2, '0')}';
+  }
+
+  Future<void> _openTripPlanner({required TripPlannerType initialType}) async {
+    final formKey = GlobalKey<FormState>();
+    final cityCtrl = TextEditingController();
+    final fromCtrl = TextEditingController();
+    final toCtrl = TextEditingController();
+    TripPlannerType plannerType = initialType;
+    DateTimeRange? hotelRange;
+    DateTime? flightDate;
+    int adults = 2;
+    int children = 0;
+    final locationSuggestions = <String, List<LocationSuggestion>>{};
+    List<LocationSuggestion> hotelSuggestions = [];
+    List<LocationSuggestion> fromSuggestions = [];
+    List<LocationSuggestion> toSuggestions = [];
+    bool hotelSuggestionsLoading = false;
+    bool fromSuggestionsLoading = false;
+    bool toSuggestionsLoading = false;
+    Timer? hotelDebounce;
+    Timer? fromDebounce;
+    Timer? toDebounce;
+
+    Future<List<LocationSuggestion>> fetchLocationSuggestions(String query) async {
+      final trimmed = query.trim();
+      if (trimmed.length < 2) return const [];
+
+      final cached = locationSuggestions[trimmed.toLowerCase()];
+      if (cached != null) return cached;
+
+      final response = await bookingService.searchHotelDestinations(query: trimmed);
+      final result = response is Map ? response['result'] : null;
+      final rawItems = result is Map
+          ? (result['result'] is List
+              ? result['result'] as List
+              : (result['hotels'] is List ? result['hotels'] as List : const []))
+          : (result is List ? result : const []);
+
+      final suggestions = <LocationSuggestion>[];
+      for (final item in rawItems) {
+        if (item is! Map) continue;
+        final city = item['city']?.toString().trim() ??
+            item['name']?.toString().trim() ??
+            item['destinationName']?.toString().trim() ??
+            item['label']?.toString().trim() ??
+            '';
+        final state = item['state']?.toString().trim().isNotEmpty == true
+            ? item['state'].toString().trim()
+            : item['region']?.toString().trim().isNotEmpty == true
+                ? item['region'].toString().trim()
+                : null;
+        final country = item['country']?.toString().trim().isNotEmpty == true
+            ? item['country'].toString().trim()
+            : item['countryName']?.toString().trim().isNotEmpty == true
+                ? item['countryName'].toString().trim()
+                : null;
+        final destinationId = item['id']?.toString() ?? item['destinationId']?.toString();
+
+        final parts = <String>[];
+        if (city.isNotEmpty) parts.add(city);
+        if (state != null && state.isNotEmpty) parts.add(state);
+        if (country != null && country.isNotEmpty) parts.add(country);
+        final label = parts.isNotEmpty ? parts.join(', ') : trimmed;
+
+        suggestions.add(
+          LocationSuggestion(
+            label: label,
+            value: city.isNotEmpty ? city : trimmed,
+            destinationId: destinationId,
+            state: state,
+            country: country,
+          ),
+        );
+      }
+
+      locationSuggestions[trimmed.toLowerCase()] = suggestions;
+      return suggestions;
+    }
+
+    try {
+      final plannedMessage = await showModalBottomSheet<String>(
+        context: context,
+        isScrollControlled: true,
+        backgroundColor: Colors.transparent,
+        builder: (sheetContext) {
+          return StatefulBuilder(
+            builder: (sheetContext, setSheetState) {
+              Future<void> pickHotelDates() async {
+                final now = DateTime.now();
+                final firstDate = DateTime(now.year, now.month, now.day);
+                final initialRange = hotelRange ??
+                    DateTimeRange(
+                      start: firstDate.add(const Duration(days: 1)),
+                      end: firstDate.add(const Duration(days: 2)),
+                    );
+                final range = await showDateRangePicker(
+                  context: sheetContext,
+                  firstDate: firstDate,
+                  lastDate: firstDate.add(const Duration(days: 365)),
+                  initialDateRange: initialRange,
+                );
+                if (range != null) {
+                  setSheetState(() => hotelRange = range);
+                }
+              }
+
+              Future<void> pickFlightDate() async {
+                final now = DateTime.now();
+                final firstDate = DateTime(now.year, now.month, now.day);
+                final initialDate =
+                    flightDate ?? firstDate.add(const Duration(days: 1));
+                final selectedDate = await showDatePicker(
+                  context: sheetContext,
+                  firstDate: firstDate,
+                  lastDate: firstDate.add(const Duration(days: 365)),
+                  initialDate: initialDate,
+                );
+                if (selectedDate != null) {
+                  setSheetState(() => flightDate = selectedDate);
+                }
+              }
+
+              Widget buildPeopleSelector({
+                required String label,
+                required int value,
+                required int min,
+                required int max,
+                required ValueChanged<int> onChanged,
+              }) {
+                return DropdownButtonFormField<int>(
+                  value: value,
+                  decoration: InputDecoration(
+                    labelText: label,
+                    filled: true,
+                    fillColor: Colors.white,
+                    border: const OutlineInputBorder(),
+                  ),
+                  items: [
+                    for (var count = min; count <= max; count++)
+                      DropdownMenuItem(
+                        value: count,
+                        child: Text(count.toString()),
+                      ),
+                  ],
+                  onChanged: (selected) {
+                    if (selected != null) {
+                      onChanged(selected);
+                    }
+                  },
+                );
+              }
+
+              Widget buildLocationAutocomplete({
+                required String label,
+                required TextEditingController controller,
+                required List<LocationSuggestion> suggestions,
+                required bool loading,
+                required ValueChanged<String> onChanged,
+                required ValueChanged<LocationSuggestion> onSelected,
+                required String? Function(String?) validator,
+              }) {
+                return Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    TextFormField(
+                      controller: controller,
+                      decoration: InputDecoration(
+                        labelText: label,
+                        filled: true,
+                        fillColor: Colors.white,
+                        border: const OutlineInputBorder(),
+                      ),
+                      validator: validator,
+                      onChanged: onChanged,
+                      textCapitalization: TextCapitalization.words,
+                    ),
+                    if (loading) ...[
+                      const SizedBox(height: 6),
+                      const LinearProgressIndicator(minHeight: 2),
+                    ],
+                    if (suggestions.isNotEmpty) ...[
+                      const SizedBox(height: 6),
+                      Container(
+                        constraints: const BoxConstraints(maxHeight: 240),
+                        decoration: BoxDecoration(
+                          color: Colors.white,
+                          borderRadius: BorderRadius.circular(14),
+                          border: Border.all(color: const Color(0xFFE1E7F4)),
+                          boxShadow: const [
+                            BoxShadow(
+                              color: Colors.black12,
+                              blurRadius: 8,
+                              offset: Offset(0, 3),
+                            ),
+                          ],
+                        ),
+                        child: ListView.separated(
+                          padding: EdgeInsets.zero,
+                          shrinkWrap: true,
+                          itemCount: suggestions.length,
+                          separatorBuilder: (_, __) => Divider(height: 1, color: Colors.grey.shade200),
+                          itemBuilder: (context, index) {
+                            final option = suggestions[index];
+                            return ListTile(
+                              dense: true,
+                              title: Text(option.label),
+                              subtitle: option.country != null || option.state != null
+                                  ? Text([
+                                      if (option.state != null) option.state,
+                                      if (option.country != null) option.country,
+                                    ].join(' • '))
+                                  : null,
+                              onTap: () => onSelected(option),
+                            );
+                          },
+                        ),
+                      ),
+                    ],
+                  ],
+                );
+              }
+
+              void scheduleSuggestionLoad({
+                required String query,
+                required ValueChanged<List<LocationSuggestion>> setResults,
+                required ValueChanged<bool> setLoading,
+                required Timer? existingTimer,
+                required void Function(Timer?) storeTimer,
+              }) {
+                existingTimer?.cancel();
+                storeTimer(
+                  Timer(const Duration(milliseconds: 250), () async {
+                    final trimmed = query.trim();
+                    if (trimmed.length < 2) {
+                      setResults(const []);
+                      setLoading(false);
+                      return;
+                    }
+
+                    setLoading(true);
+                    final suggestions = await fetchLocationSuggestions(trimmed);
+                    setResults(suggestions.take(8).toList());
+                    setLoading(false);
+                  }),
+                );
+              }
+
+              return Padding(
+                padding: EdgeInsets.only(
+                  left: 12,
+                  right: 12,
+                  bottom: MediaQuery.of(sheetContext).viewInsets.bottom + 12,
+                ),
+                child: Align(
+                  alignment: Alignment.bottomCenter,
+                  child: Material(
+                    color: Colors.transparent,
+                    child: Container(
+                      constraints: BoxConstraints(
+                        maxWidth: 760,
+                        maxHeight:
+                            MediaQuery.of(sheetContext).size.height * 0.9,
+                      ),
+                      decoration: BoxDecoration(
+                        color: Colors.white,
+                        borderRadius: BorderRadius.circular(24),
+                        boxShadow: const [
+                          BoxShadow(
+                            color: Colors.black26,
+                            blurRadius: 24,
+                            offset: Offset(0, 12),
+                          ),
+                        ],
+                      ),
+                      child: SingleChildScrollView(
+                        padding: const EdgeInsets.all(20),
+                        child: Form(
+                          key: formKey,
+                          child: Column(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            mainAxisSize: MainAxisSize.min,
+                            children: [
+                              Container(
+                                width: double.infinity,
+                                padding: const EdgeInsets.symmetric(
+                                  horizontal: 12,
+                                  vertical: 8,
+                                ),
+                                decoration: BoxDecoration(
+                                  color: const Color(0xFFEAF0FF),
+                                  borderRadius: BorderRadius.circular(999),
+                                ),
+                                child: const Text(
+                                  'Date-first booking',
+                                  textAlign: TextAlign.center,
+                                  style: TextStyle(
+                                    color: Color(0xFF1e3c72),
+                                    fontSize: 12,
+                                    fontWeight: FontWeight.w700,
+                                  ),
+                                ),
+                              ),
+                              const SizedBox(height: 14),
+                              Row(
+                                children: [
+                                  const Expanded(
+                                    child: Text(
+                                      'Plan your trip',
+                                      style: TextStyle(
+                                        fontSize: 24,
+                                        fontWeight: FontWeight.w700,
+                                      ),
+                                    ),
+                                  ),
+                                  IconButton(
+                                    onPressed: () =>
+                                        Navigator.of(sheetContext).pop(),
+                                    icon: const Icon(Icons.close),
+                                  ),
+                                ],
+                              ),
+                              const SizedBox(height: 8),
+                              const Text(
+                                'Choose the stay or departure date first. We’ll keep the traveler count and booking details in sync.',
+                                style: TextStyle(color: Colors.black54),
+                              ),
+                              const SizedBox(height: 16),
+                              Wrap(
+                                spacing: 8,
+                                runSpacing: 8,
+                                children: [
+                                  ChoiceChip(
+                                    label: const Text('Hotel'),
+                                    selected:
+                                        plannerType == TripPlannerType.hotel,
+                                    onSelected: (_) {
+                                      setSheetState(() =>
+                                          plannerType = TripPlannerType.hotel);
+                                    },
+                                  ),
+                                  ChoiceChip(
+                                    label: const Text('Flight'),
+                                    selected:
+                                        plannerType == TripPlannerType.flight,
+                                    onSelected: (_) {
+                                      setSheetState(() =>
+                                          plannerType = TripPlannerType.flight);
+                                    },
+                                  ),
+                                ],
+                              ),
+                              const SizedBox(height: 16),
+                              if (plannerType == TripPlannerType.hotel) ...[
+                                const Text(
+                                  '1. Select stay dates',
+                                  style: TextStyle(
+                                    fontSize: 13,
+                                    fontWeight: FontWeight.w700,
+                                    color: Color(0xFF1e3c72),
+                                  ),
+                                ),
+                                const SizedBox(height: 8),
+                                OutlinedButton.icon(
+                                  onPressed: pickHotelDates,
+                                  icon: const Icon(Icons.date_range),
+                                  label: const Text(
+                                    'Choose check-in and check-out',
+                                  ),
+                                  style: OutlinedButton.styleFrom(
+                                    foregroundColor: const Color(0xFF1e3c72),
+                                    side: const BorderSide(
+                                      color: Color(0xFFd7e0f4),
+                                    ),
+                                    padding: const EdgeInsets.symmetric(
+                                      horizontal: 16,
+                                      vertical: 14,
+                                    ),
+                                    shape: RoundedRectangleBorder(
+                                      borderRadius: BorderRadius.circular(16),
+                                    ),
+                                  ),
+                                ),
+                                if (hotelRange != null) ...[
+                                  const SizedBox(height: 8),
+                                  Container(
+                                    width: double.infinity,
+                                    padding: const EdgeInsets.all(12),
+                                    decoration: BoxDecoration(
+                                      color: const Color(0xFFF4F7FD),
+                                      borderRadius: BorderRadius.circular(16),
+                                      border: Border.all(
+                                        color: const Color(0xFFE1E7F4),
+                                      ),
+                                    ),
+                                    child: Row(
+                                      children: [
+                                        const Icon(
+                                          Icons.event_available,
+                                          color: Color(0xFF1e3c72),
+                                          size: 18,
+                                        ),
+                                        const SizedBox(width: 8),
+                                        Expanded(
+                                          child: Text(
+                                            'Stay dates: ${_formatPlannerDate(hotelRange!.start)} to ${_formatPlannerDate(hotelRange!.end)}',
+                                            style: const TextStyle(
+                                              fontWeight: FontWeight.w600,
+                                            ),
+                                          ),
+                                        ),
+                                      ],
+                                    ),
+                                  ),
+                                ],
+                                const SizedBox(height: 16),
+                                const Text(
+                                  '2. Tell us where you want to stay',
+                                  style: TextStyle(
+                                    fontSize: 13,
+                                    fontWeight: FontWeight.w700,
+                                    color: Color(0xFF1e3c72),
+                                  ),
+                                ),
+                                const SizedBox(height: 8),
+                                  buildLocationAutocomplete(
+                                    label: 'Destination city or state',
+                                    controller: cityCtrl,
+                                    suggestions: hotelSuggestions,
+                                    loading: hotelSuggestionsLoading,
+                                    onChanged: (query) {
+                                      scheduleSuggestionLoad(
+                                        query: query,
+                                        setResults: (results) {
+                                          setSheetState(() => hotelSuggestions = results);
+                                        },
+                                        setLoading: (value) {
+                                          setSheetState(() => hotelSuggestionsLoading = value);
+                                        },
+                                        existingTimer: hotelDebounce,
+                                        storeTimer: (timer) => hotelDebounce = timer,
+                                      );
+                                    },
+                                    onSelected: (selected) {
+                                      setSheetState(() {
+                                        cityCtrl.text = selected.value;
+                                        hotelSuggestions = [];
+                                        hotelSuggestionsLoading = false;
+                                      });
+                                    },
+                                    validator: (value) {
+                                      if (value == null || value.trim().isEmpty) {
+                                        return 'Choose a city or state';
+                                      }
+                                      return null;
+                                    },
+                                  ),
+                              ] else ...[
+                                const Text(
+                                  '1. Choose where you are flying',
+                                  style: TextStyle(
+                                    fontSize: 13,
+                                    fontWeight: FontWeight.w700,
+                                    color: Color(0xFF1e3c72),
+                                  ),
+                                ),
+                                const SizedBox(height: 8),
+                                buildLocationAutocomplete(
+                                  label: 'From city or state',
+                                  controller: fromCtrl,
+                                  suggestions: fromSuggestions,
+                                  loading: fromSuggestionsLoading,
+                                  onChanged: (query) {
+                                    scheduleSuggestionLoad(
+                                      query: query,
+                                      setResults: (results) {
+                                        setSheetState(() => fromSuggestions = results);
+                                      },
+                                      setLoading: (value) {
+                                        setSheetState(() => fromSuggestionsLoading = value);
+                                      },
+                                      existingTimer: fromDebounce,
+                                      storeTimer: (timer) => fromDebounce = timer,
+                                    );
+                                  },
+                                  onSelected: (selected) {
+                                    setSheetState(() {
+                                      fromCtrl.text = selected.value;
+                                      fromSuggestions = [];
+                                      fromSuggestionsLoading = false;
+                                    });
+                                  },
+                                  validator: (value) {
+                                    if (value == null || value.trim().isEmpty) {
+                                      return 'Choose a departure city or state';
+                                    }
+                                    return null;
+                                  },
+                                ),
+                                const SizedBox(height: 12),
+                                buildLocationAutocomplete(
+                                  label: 'To city or state',
+                                  controller: toCtrl,
+                                  suggestions: toSuggestions,
+                                  loading: toSuggestionsLoading,
+                                  onChanged: (query) {
+                                    scheduleSuggestionLoad(
+                                      query: query,
+                                      setResults: (results) {
+                                        setSheetState(() => toSuggestions = results);
+                                      },
+                                      setLoading: (value) {
+                                        setSheetState(() => toSuggestionsLoading = value);
+                                      },
+                                      existingTimer: toDebounce,
+                                      storeTimer: (timer) => toDebounce = timer,
+                                    );
+                                  },
+                                  onSelected: (selected) {
+                                    setSheetState(() {
+                                      toCtrl.text = selected.value;
+                                      toSuggestions = [];
+                                      toSuggestionsLoading = false;
+                                    });
+                                  },
+                                  validator: (value) {
+                                    if (value == null || value.trim().isEmpty) {
+                                      return 'Choose a destination city or state';
+                                    }
+                                    return null;
+                                  },
+                                ),
+                                const SizedBox(height: 16),
+                                const Text(
+                                  '2. Select the departure date',
+                                  style: TextStyle(
+                                    fontSize: 13,
+                                    fontWeight: FontWeight.w700,
+                                    color: Color(0xFF1e3c72),
+                                  ),
+                                ),
+                                const SizedBox(height: 8),
+                                OutlinedButton.icon(
+                                  onPressed: pickFlightDate,
+                                  icon: const Icon(Icons.flight_takeoff),
+                                  label: const Text('Choose departure date'),
+                                  style: OutlinedButton.styleFrom(
+                                    foregroundColor: const Color(0xFF1e3c72),
+                                    side: const BorderSide(
+                                      color: Color(0xFFd7e0f4),
+                                    ),
+                                    padding: const EdgeInsets.symmetric(
+                                      horizontal: 16,
+                                      vertical: 14,
+                                    ),
+                                    shape: RoundedRectangleBorder(
+                                      borderRadius: BorderRadius.circular(16),
+                                    ),
+                                  ),
+                                ),
+                                if (flightDate != null) ...[
+                                  const SizedBox(height: 8),
+                                  Container(
+                                    width: double.infinity,
+                                    padding: const EdgeInsets.all(12),
+                                    decoration: BoxDecoration(
+                                      color: const Color(0xFFF4F7FD),
+                                      borderRadius: BorderRadius.circular(16),
+                                      border: Border.all(
+                                        color: const Color(0xFFE1E7F4),
+                                      ),
+                                    ),
+                                    child: Row(
+                                      children: [
+                                        const Icon(
+                                          Icons.event_available,
+                                          color: Color(0xFF1e3c72),
+                                          size: 18,
+                                        ),
+                                        const SizedBox(width: 8),
+                                        Expanded(
+                                          child: Text(
+                                            'Departure date: ${_formatPlannerDate(flightDate!)}',
+                                            style: const TextStyle(
+                                              fontWeight: FontWeight.w600,
+                                            ),
+                                          ),
+                                        ),
+                                      ],
+                                    ),
+                                  ),
+                                ],
+                              ],
+                              const SizedBox(height: 16),
+                              const Text(
+                                '3. Add travelers',
+                                style: TextStyle(
+                                  fontSize: 13,
+                                  fontWeight: FontWeight.w700,
+                                  color: Color(0xFF1e3c72),
+                                ),
+                              ),
+                              const SizedBox(height: 8),
+                              Row(
+                                children: [
+                                  Expanded(
+                                    child: buildPeopleSelector(
+                                      label: 'Adults',
+                                      value: adults,
+                                      min: 1,
+                                      max: 9,
+                                      onChanged: (value) =>
+                                          setSheetState(() => adults = value),
+                                    ),
+                                  ),
+                                  const SizedBox(width: 12),
+                                  Expanded(
+                                    child: buildPeopleSelector(
+                                      label: 'Children',
+                                      value: children,
+                                      min: 0,
+                                      max: 9,
+                                      onChanged: (value) =>
+                                          setSheetState(() => children = value),
+                                    ),
+                                  ),
+                                ],
+                              ),
+                              const SizedBox(height: 20),
+                              SizedBox(
+                                width: double.infinity,
+                                child: ElevatedButton.icon(
+                                  onPressed: () {
+                                    if (!formKey.currentState!.validate())
+                                      return;
+
+                                    if (plannerType == TripPlannerType.hotel) {
+                                      if (hotelRange == null) {
+                                        ScaffoldMessenger.of(context)
+                                            .showSnackBar(
+                                          const SnackBar(
+                                            content: Text(
+                                                'Pick hotel dates before continuing.'),
+                                          ),
+                                        );
+                                        return;
+                                      }
+
+                                      final city = cityCtrl.text.trim();
+                                      final adultsLabel = adults == 1
+                                          ? '1 adult'
+                                          : '$adults adults';
+                                      final childrenLabel = children == 1
+                                          ? '1 child'
+                                          : '$children children';
+                                      Navigator.of(sheetContext).pop(
+                                        'book a hotel in $city from ${_formatPlannerDate(hotelRange!.start)} to ${_formatPlannerDate(hotelRange!.end)} for $adultsLabel and $childrenLabel',
+                                      );
+                                      return;
+                                    }
+
+                                    if (flightDate == null) {
+                                      ScaffoldMessenger.of(context)
+                                          .showSnackBar(
+                                        const SnackBar(
+                                          content: Text(
+                                              'Pick a departure date before continuing.'),
+                                        ),
+                                      );
+                                      return;
+                                    }
+
+                                    final from = fromCtrl.text.trim();
+                                    final to = toCtrl.text.trim();
+                                    final adultsLabel = adults == 1
+                                        ? '1 adult'
+                                        : '$adults adults';
+                                    final childrenLabel = children == 1
+                                        ? '1 child'
+                                        : '$children children';
+                                    Navigator.of(sheetContext).pop(
+                                      'book a flight from $from to $to on ${_formatPlannerDate(flightDate!)} for $adultsLabel and $childrenLabel',
+                                    );
+                                  },
+                                  icon: const Icon(Icons.auto_awesome),
+                                  label: Text(
+                                    plannerType == TripPlannerType.hotel
+                                        ? 'Search hotels with these dates'
+                                        : 'Search flights with this date',
+                                  ),
+                                  style: ElevatedButton.styleFrom(
+                                    backgroundColor: const Color(0xFF1e3c72),
+                                    foregroundColor: Colors.white,
+                                    elevation: 0,
+                                    padding: const EdgeInsets.symmetric(
+                                      horizontal: 16,
+                                      vertical: 16,
+                                    ),
+                                    shape: RoundedRectangleBorder(
+                                      borderRadius: BorderRadius.circular(18),
+                                    ),
+                                  ),
+                                ),
+                              ),
+                            ],
+                          ),
+                        ),
+                      ),
+                    ),
+                  ),
+                ),
+              );
+            },
+          );
+        },
+      );
+
+      if (plannedMessage != null && plannedMessage.trim().isNotEmpty) {
+        await _send(plannedMessage);
+      }
+    } finally {
+      cityCtrl.dispose();
+      fromCtrl.dispose();
+      toCtrl.dispose();
+    }
+  }
+
   /// Handles the API response and converts technical errors into conversation
   void _handleApiResponse(Map<String, dynamic> data) {
     sessionId = data['sessionId'] ?? sessionId;
@@ -170,7 +969,6 @@ class _HomePageState extends State<HomePage> {
       if (cardsData['result'] != null && cardsData['result'] is List) {
         final results = cardsData['result'] as List;
         if (results.isNotEmpty) {
-          _awaitingFlightDateRetry = false;
           final reply = data['reply'] ??
               'I found ${cardsData['count'] ?? results.length} options for you:';
 
@@ -237,8 +1035,11 @@ class _HomePageState extends State<HomePage> {
 
               return {
                 ...flight,
-                'checkIn': flight['checkIn'] ?? responseCheckIn ?? lastSearchCheckIn,
-                'checkOut': flight['checkOut'] ?? responseCheckOut ?? lastSearchCheckOut,
+                'checkIn':
+                    flight['checkIn'] ?? responseCheckIn ?? lastSearchCheckIn,
+                'checkOut': flight['checkOut'] ??
+                    responseCheckOut ??
+                    lastSearchCheckOut,
               };
             }
             return flight;
@@ -259,7 +1060,6 @@ class _HomePageState extends State<HomePage> {
     if (data['cards'] != null &&
         data['cards'] is List &&
         data['cards'].isNotEmpty) {
-      _awaitingFlightDateRetry = false;
       final cards = data['cards'] as List;
       final reply = data['reply'] ?? 'Here are your options:';
 
@@ -281,6 +1081,13 @@ class _HomePageState extends State<HomePage> {
             firstCardRecommendationId.isNotEmpty) {
           lastRecommendationId = firstCardRecommendationId;
         }
+        final firstCardCorrelationId =
+            firstCard['correlationId']?.toString().trim() ??
+                firstCard['result']?['correlationId']?.toString().trim();
+        if (firstCardCorrelationId != null &&
+            firstCardCorrelationId.isNotEmpty) {
+          lastCorrelationId = firstCardCorrelationId;
+        }
       }
 
       final normalizedCards = cards.map((item) {
@@ -289,6 +1096,9 @@ class _HomePageState extends State<HomePage> {
               item['recommendationId']?.toString().trim();
           final nestedRecommendationId =
               item['result']?['recommendationId']?.toString().trim();
+          final itemCorrelationId =
+              item['correlationId']?.toString().trim() ??
+                  item['result']?['correlationId']?.toString().trim();
           return {
             ...item,
             'token':
@@ -300,9 +1110,11 @@ class _HomePageState extends State<HomePage> {
                         nestedRecommendationId.isNotEmpty)
                     ? nestedRecommendationId
                     : lastRecommendationId,
+            'correlationId': itemCorrelationId ?? lastCorrelationId,
             // Preserve search context for booking
             'checkIn': item['checkIn'] ?? responseCheckIn ?? lastSearchCheckIn,
-            'checkOut': item['checkOut'] ?? responseCheckOut ?? lastSearchCheckOut,
+            'checkOut':
+                item['checkOut'] ?? responseCheckOut ?? lastSearchCheckOut,
             'rooms': item['rooms'] ??
                 [
                   {
@@ -327,19 +1139,6 @@ class _HomePageState extends State<HomePage> {
 
     // Handle plain text replies
     String botReply = data['reply'] ?? "I couldn't find any results for that.";
-
-    final lowerReply = botReply.toLowerCase();
-    final noFlightsFound = lowerReply.contains('no flights found') ||
-        lowerReply.contains('no flight found') ||
-        lowerReply.contains('no flights available');
-    if (noFlightsFound && _lastFlightFrom != null && _lastFlightTo != null) {
-      _awaitingFlightDateRetry = true;
-      _bot(
-        '$botReply Please enter a new departure date and I will search again for $_lastFlightFrom to $_lastFlightTo.',
-      );
-      return;
-    }
-
     _bot(botReply);
   }
 
@@ -572,7 +1371,8 @@ class _HomePageState extends State<HomePage> {
 
   /// Check if string is a date in format YYYY-MM-DD
   bool _isSupportedDateFormat(String text) {
-    return _normalizeNaturalDate(text.trim(), defaultYear: DateTime.now().year) !=
+    return _normalizeNaturalDate(text.trim(),
+            defaultYear: DateTime.now().year) !=
         null;
   }
 
@@ -626,37 +1426,6 @@ class _HomePageState extends State<HomePage> {
     return {'city': city, 'checkIn': checkIn, 'checkOut': checkOut};
   }
 
-  Map<String, String?> _extractFlightSearchParameters(String message) {
-    final normalizedMessage = _normalizeNaturalDatesInMessage(message);
-    String? from;
-    String? to;
-    String? departureDate;
-
-    final fromToRegex = RegExp(
-      r'\bfrom\s+([a-zA-Z][a-zA-Z\s.-]{1,40}?)\s+to\s+([a-zA-Z][a-zA-Z\s.-]{1,40}?)(?=(?:\s+(?:on|for|at|leaving|departing)\b)|$)',
-      caseSensitive: false,
-    );
-    final match = fromToRegex.firstMatch(normalizedMessage);
-    if (match != null) {
-      from = match.group(1)?.trim();
-      to = match.group(2)?.trim();
-    }
-
-    final dateRegex = RegExp(
-      r'\b(?:\d{4}-\d{2}-\d{2}|\d{1,2}/\d{1,2}/\d{4}|\d{1,2}(?:st|nd|rd|th)?\s+[a-zA-Z]+(?:\s+\d{4})?|[a-zA-Z]+\s+\d{1,2}(?:st|nd|rd|th)?(?:\s+\d{4})?)\b',
-      caseSensitive: false,
-    );
-    final dateMatch = dateRegex.firstMatch(normalizedMessage);
-    if (dateMatch != null) {
-      departureDate = _normalizeNaturalDate(
-        dateMatch.group(0)!,
-        defaultYear: DateTime.now().year,
-      );
-    }
-
-    return {'from': from, 'to': to, 'departureDate': departureDate};
-  }
-
   /// Try to format incomplete hotel search as complete query
   String? _tryFormatAsHotelSearch(String userMessage) {
     final params = _extractSearchParameters(userMessage);
@@ -703,54 +1472,6 @@ class _HomePageState extends State<HomePage> {
 
     final normalizedText = _normalizeNaturalDatesInMessage(trimmed);
 
-    if (_awaitingHotelDateRetry && lastSearchCity != null) {
-      setState(() => messages.insert(0, ChatMessage(trimmed, fromUser: true)));
-      inputCtrl.clear();
-
-      final params = _extractSearchParameters(normalizedText);
-      final newCheckIn = params['checkIn'];
-      final newCheckOut = params['checkOut'];
-
-      if (newCheckIn == null || newCheckOut == null) {
-        _bot(
-          'Please enter both check-in and check-out dates so I can search again (example: 2026-05-10 to 2026-05-12).',
-        );
-        return;
-      }
-
-      lastSearchCheckIn = newCheckIn;
-      lastSearchCheckOut = newCheckOut;
-      _awaitingHotelDateRetry = false;
-      await _sendToBackend(
-        'Hotel in $lastSearchCity from $newCheckIn to $newCheckOut',
-      );
-      return;
-    }
-
-    if (_awaitingFlightDateRetry &&
-        _lastFlightFrom != null &&
-        _lastFlightTo != null) {
-      setState(() => messages.insert(0, ChatMessage(trimmed, fromUser: true)));
-      inputCtrl.clear();
-
-      final flightParams = _extractFlightSearchParameters(normalizedText);
-      final newDepartureDate = flightParams['departureDate'];
-
-      if (newDepartureDate == null) {
-        _bot(
-          'Please enter a new departure date so I can search flights again (example: 2026-05-10).',
-        );
-        return;
-      }
-
-      _lastFlightDepartureDate = newDepartureDate;
-      _awaitingFlightDateRetry = false;
-      await _sendToBackend(
-        'Flight from $_lastFlightFrom to $_lastFlightTo on $newDepartureDate',
-      );
-      return;
-    }
-
     if ((_awaitingTravelerCounts == true) && _pendingBookingQuery != null) {
       final travelerCounts = _extractTravelerCounts(normalizedText);
 
@@ -794,15 +1515,6 @@ class _HomePageState extends State<HomePage> {
     final formattedMessage = _tryFormatAsHotelSearch(messageText);
     if (formattedMessage != null && formattedMessage != messageText) {
       userDisplayMessage = formattedMessage;
-    }
-
-    final flightParams = _extractFlightSearchParameters(userDisplayMessage);
-    if (flightParams['from'] != null && flightParams['to'] != null) {
-      _lastFlightFrom = flightParams['from'];
-      _lastFlightTo = flightParams['to'];
-      if (flightParams['departureDate'] != null) {
-        _lastFlightDepartureDate = flightParams['departureDate'];
-      }
     }
 
     setState(() => loading = true);
@@ -885,8 +1597,12 @@ class _HomePageState extends State<HomePage> {
     if (it is Map && it['rooms'] == null) {
       it['rooms'] = defaultRoomsConfig;
     }
+    if (it is Map &&
+        (it['correlationId'] == null || it['correlationId'].toString().isEmpty) &&
+        lastCorrelationId != null) {
+      it['correlationId'] = lastCorrelationId;
+    }
 
-    // Add user message
     setState(
       () => messages.insert(0, ChatMessage('$name — \$$price', fromUser: true)),
     );
@@ -1495,20 +2211,18 @@ class _HomePageState extends State<HomePage> {
               : <dynamic>[]);
 
       if (hotels.isEmpty) {
-        _awaitingHotelDateRetry = true;
-        _bot(
-          'No hotels found for those dates. Please enter new check-in and check-out dates.',
-        );
+        _bot('No hotels found for the selected dates.');
         return;
       }
-
-      _awaitingHotelDateRetry = false;
 
       final token = resultMap['token']?.toString();
       final correlationId = resultMap['correlationId']?.toString();
 
       if (token != null && token.isNotEmpty) {
         lastToken = token;
+      }
+      if (correlationId != null && correlationId.isNotEmpty) {
+        lastCorrelationId = correlationId;
       }
       lastDestinationId = destinationId;
       lastSearchCity = city;
@@ -1521,16 +2235,31 @@ class _HomePageState extends State<HomePage> {
         if (recommendationId != null && recommendationId.isNotEmpty) {
           lastRecommendationId = recommendationId;
         }
+
+        final itemCorrelationId = h['correlationId']?.toString().trim() ??
+            h['result']?['correlationId']?.toString().trim() ??
+            h['hotel']?['correlationId']?.toString().trim();
+        if (itemCorrelationId != null && itemCorrelationId.isNotEmpty) {
+          lastCorrelationId = itemCorrelationId;
+        }
+
+        final itemToken = h['token']?.toString().trim() ??
+            h['hotelToken']?.toString().trim() ??
+            h['result']?['token']?.toString().trim() ??
+            token;
+        if (itemToken != null && itemToken.isNotEmpty) {
+          lastToken = itemToken;
+        }
+
         return {
           ...h,
-          'token': h['token'] ?? h['hotelToken'] ?? token,
+          'token': itemToken,
           'recommendationId': recommendationId ?? lastRecommendationId,
           'destinationId': h['destinationId'] ?? destinationId,
           'checkIn': normalizedCheckIn,
           'checkOut': normalizedCheckOut,
           'rooms': h['rooms'] ?? defaultRoomsConfig,
-          if (correlationId != null && correlationId.isNotEmpty)
-            'correlationId': correlationId,
+          'correlationId': itemCorrelationId ?? correlationId,
         };
       }).toList();
 
@@ -1808,12 +2537,12 @@ class _HomePageState extends State<HomePage> {
           style: TextStyle(fontWeight: FontWeight.w600, fontSize: 13),
         ),
         const SizedBox(height: 8),
-          _buildPriceSortControls(
-            selectedMode: _hotelSortMode,
-            onChanged: (mode) {
-              setState(() => _hotelSortMode = mode);
-            },
-          ),
+        _buildPriceSortControls(
+          selectedMode: _hotelSortMode,
+          onChanged: (mode) {
+            setState(() => _hotelSortMode = mode);
+          },
+        ),
       ],
     );
 
@@ -2895,63 +3624,126 @@ class _HomePageState extends State<HomePage> {
             ),
           ),
         ),
-        child: Row(
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
           children: [
-            Expanded(
-              child: Padding(
-                padding:
-                    const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
-                child: TextField(
-                  controller: inputCtrl,
-                  onSubmitted: _send,
-                  style: TextStyle(color: Colors.black),
-                  decoration: InputDecoration(
-                    hintText: 'Ask me anything about flights or hotels...',
-                    hintStyle: TextStyle(color: Colors.black),
-                    fillColor: Colors.white.withOpacity(0.95),
-                    filled: true,
-                    prefixIcon: Icon(Icons.search, color: Color(0xFF667eea)),
-                    border: OutlineInputBorder(
-                      borderRadius: BorderRadius.circular(24),
-                      borderSide: BorderSide.none,
+            Padding(
+              padding: const EdgeInsets.fromLTRB(12, 10, 12, 0),
+              child: Container(
+                width: double.infinity,
+                padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 10),
+                decoration: BoxDecoration(
+                  color: Colors.white.withOpacity(0.12),
+                  borderRadius: BorderRadius.circular(20),
+                  border: Border.all(color: Colors.white.withOpacity(0.16)),
+                ),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    const Text(
+                      'Start with dates',
+                      style: TextStyle(
+                        color: Colors.white,
+                        fontSize: 14,
+                        fontWeight: FontWeight.w700,
+                      ),
                     ),
-                    contentPadding:
-                        EdgeInsets.symmetric(horizontal: 16, vertical: 12),
-                  ),
+                    const SizedBox(height: 2),
+                    Text(
+                      'Choose dates first, then add travelers.',
+                      style: TextStyle(
+                        color: Colors.white.withOpacity(0.84),
+                        fontSize: 10,
+                        height: 1.2,
+                      ),
+                    ),
+                    const SizedBox(height: 6),
+                    Row(
+                      children: [
+                        _buildPlannerActionButton(
+                          icon: Icons.hotel,
+                          title: 'Hotel',
+                          subtitle: 'Stay dates',
+                          onPressed: () => _openTripPlanner(
+                            initialType: TripPlannerType.hotel,
+                          ),
+                        ),
+                        const SizedBox(width: 8),
+                        _buildPlannerActionButton(
+                          icon: Icons.flight_takeoff,
+                          title: 'Flight',
+                          subtitle: 'Departure date',
+                          onPressed: () => _openTripPlanner(
+                            initialType: TripPlannerType.flight,
+                          ),
+                        ),
+                      ],
+                    ),
+                  ],
                 ),
               ),
             ),
-            Padding(
-              padding: const EdgeInsets.only(right: 12),
-              child: loading
-                  ? Container(
-                      width: 48,
-                      height: 48,
-                      decoration: BoxDecoration(
-                        gradient: LinearGradient(
-                          colors: [Color(0xFF667eea), Color(0xFF764ba2)],
+            const SizedBox(height: 6),
+            Row(
+              children: [
+                Expanded(
+                  child: Padding(
+                    padding:
+                        const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+                    child: TextField(
+                      controller: inputCtrl,
+                      onSubmitted: _send,
+                      style: TextStyle(color: Colors.black),
+                      decoration: InputDecoration(
+                        hintText: 'Ask me anything about flights or hotels...',
+                        hintStyle: TextStyle(color: Colors.black),
+                        fillColor: Colors.white.withOpacity(0.95),
+                        filled: true,
+                        prefixIcon:
+                            Icon(Icons.search, color: Color(0xFF667eea)),
+                        border: OutlineInputBorder(
+                          borderRadius: BorderRadius.circular(24),
+                          borderSide: BorderSide.none,
                         ),
-                        shape: BoxShape.circle,
+                        contentPadding:
+                            EdgeInsets.symmetric(horizontal: 16, vertical: 12),
                       ),
-                      child: Center(
-                        child: SizedBox(
-                          width: 20,
-                          height: 20,
-                          child: CircularProgressIndicator(
-                            strokeWidth: 2,
-                            valueColor:
-                                AlwaysStoppedAnimation<Color>(Colors.white),
-                          ),
-                        ),
-                      ),
-                    )
-                  : FloatingActionButton(
-                      onPressed: () => _send(inputCtrl.text),
-                      mini: true,
-                      backgroundColor: Color(0xFF667eea),
-                      child: Icon(Icons.send, color: Colors.white),
                     ),
-            )
+                  ),
+                ),
+                Padding(
+                  padding: const EdgeInsets.only(right: 12),
+                  child: loading
+                      ? Container(
+                          width: 48,
+                          height: 48,
+                          decoration: BoxDecoration(
+                            gradient: LinearGradient(
+                              colors: [Color(0xFF667eea), Color(0xFF764ba2)],
+                            ),
+                            shape: BoxShape.circle,
+                          ),
+                          child: Center(
+                            child: SizedBox(
+                              width: 20,
+                              height: 20,
+                              child: CircularProgressIndicator(
+                                strokeWidth: 2,
+                                valueColor:
+                                    AlwaysStoppedAnimation<Color>(Colors.white),
+                              ),
+                            ),
+                          ),
+                        )
+                      : FloatingActionButton(
+                          onPressed: () => _send(inputCtrl.text),
+                          mini: true,
+                          backgroundColor: Color(0xFF667eea),
+                          child: Icon(Icons.send, color: Colors.white),
+                        ),
+                )
+              ],
+            ),
           ],
         ),
       ),
@@ -2980,8 +3772,8 @@ class _HomePageState extends State<HomePage> {
                 child: TextField(
                     controller: checkInCtrl,
                     decoration: const InputDecoration(
-                      labelText:
-                        'Check-in (YYYY-MM-DD, DD/MM/YYYY, MM/DD/YYYY, June 2)',
+                        labelText:
+                            'Check-in (YYYY-MM-DD, DD/MM/YYYY, MM/DD/YYYY, June 2)',
                         filled: true,
                         fillColor: Colors.white,
                         border: OutlineInputBorder()))),
@@ -2990,8 +3782,8 @@ class _HomePageState extends State<HomePage> {
                 child: TextField(
                     controller: checkOutCtrl,
                     decoration: const InputDecoration(
-                      labelText:
-                        'Check-out (YYYY-MM-DD, DD/MM/YYYY, MM/DD/YYYY, 2nd June)',
+                        labelText:
+                            'Check-out (YYYY-MM-DD, DD/MM/YYYY, MM/DD/YYYY, 2nd June)',
                         filled: true,
                         fillColor: Colors.white,
                         border: OutlineInputBorder()))),
@@ -3016,12 +3808,32 @@ class _HomePageState extends State<HomePage> {
     setState(() => loading = true);
 
     try {
+      final hotelId = hotel['id'] ?? hotel['hotelId'] ?? hotel['result']?['id'] ?? hotel['result']?['hotelId'];
+      if (hotelId == null || hotelId.toString().isEmpty) {
+        _bot('Unable to determine hotel id for details request.');
+        return;
+      }
+
       // Fetch hotel details from backend proxy
+      final requestToken = hotel['token']?.toString() ??
+          hotel['hotelToken']?.toString() ??
+          hotel['result']?['token']?.toString() ??
+          lastToken ??
+          '';
+      final requestCorrelationId = hotel['correlationId']?.toString() ??
+          hotel['result']?['correlationId']?.toString() ??
+          lastCorrelationId ??
+          '';
+
       final detailsResponse = await http.post(
         Uri.parse('$base/mcp/hotel/get-hotel-details'),
         headers: {'Content-Type': 'application/json'},
         body: json.encode({
-          'hotelId': hotel['id'],
+          'hotelId': hotelId.toString(),
+          if (requestToken.isNotEmpty) 'token': requestToken,
+          if (requestCorrelationId.isNotEmpty)
+            'correlationId': requestCorrelationId,
+          'contentType': 'ALL',
         }),
       );
 
@@ -3049,7 +3861,10 @@ class _HomePageState extends State<HomePage> {
       final token = (details is Map)
           ? (details['token'] ??
               details['result']?['token'] ??
+              details['result']?['content']?['token'] ??
               hotel['token'] ??
+              hotel['hotelToken'] ??
+              hotel['result']?['token'] ??
               '')
           : '';
 
@@ -3074,19 +3889,22 @@ class _HomePageState extends State<HomePage> {
 
       // Fetch hotel details and rates from backend proxy using the token
       dynamic rates;
-      final correlationId = hotel['correlationId']?.toString();
+      final ratesCorrelationId = hotel['correlationId']?.toString() ??
+          hotel['result']?['correlationId']?.toString() ??
+          lastCorrelationId ??
+          '';
       if (token is String && token.isNotEmpty) {
         final ratesResponse = await http.post(
           Uri.parse('$base/mcp/hotel/get-hotel-details-and-rates'),
           headers: {'Content-Type': 'application/json'},
           body: json.encode({
             'token': token,
-            'hotelId': hotel['id'],
+            'hotelId': hotelId.toString(),
             'checkIn': checkIn,
             'checkOut': checkOut,
             'rooms': rooms,
-            if (correlationId != null && correlationId.isNotEmpty)
-              'correlationId': correlationId,
+            if (ratesCorrelationId.isNotEmpty)
+              'correlationId': ratesCorrelationId,
           }),
         );
 
@@ -3217,8 +4035,9 @@ class _HomePageState extends State<HomePage> {
                 for (final group in groups)
                   SingleChildScrollView(
                     child: Column(
-                      children:
-                          group.map((it) => _buildFlightOptionCard(it)).toList(),
+                      children: group
+                          .map((it) => _buildFlightOptionCard(it))
+                          .toList(),
                     ),
                   ),
               ],
@@ -3230,24 +4049,68 @@ class _HomePageState extends State<HomePage> {
   }
 
   void _showHotelDetailsDialog(dynamic hotel, dynamic details, dynamic rates) {
-    final Map<String, dynamic> hotelData = (details is Map)
-        ? (details['result'] is Map<String, dynamic>
-            ? details['result']
-            : details)
-        : {};
-    List<dynamic> roomsData = [];
-    if (rates is Map) {
-      if (rates['result']?['rooms'] is List) {
-        roomsData = rates['result']['rooms'] as List<dynamic>;
-      } else if (rates['result']?['content']?['rooms'] is Map) {
-        roomsData =
-            (rates['result']['content']['rooms'] as Map).values.toList();
-      } else if (rates['rooms'] is List) {
-        roomsData = rates['rooms'] as List<dynamic>;
+    Map<String, dynamic> _ensureMap(dynamic value) {
+      if (value is Map<String, dynamic>) return value;
+      if (value is Map) return Map<String, dynamic>.from(value);
+      return <String, dynamic>{};
+    }
+
+    List<dynamic> _roomsFromMap(Map<String, dynamic> map) {
+      if (map['rooms'] is List) {
+        return List<dynamic>.from(map['rooms'] as List);
+      }
+      if (map['rooms'] is Map) {
+        return List<dynamic>.from((map['rooms'] as Map).values);
+      }
+      return <dynamic>[];
+    }
+
+    List<dynamic> _extractRooms(dynamic source) {
+      if (source is! Map) return <dynamic>[];
+      final sourceMap = _ensureMap(source);
+
+      if (sourceMap['result'] is Map) {
+        final resultMap = _ensureMap(sourceMap['result']);
+        if (resultMap['content'] is Map) {
+          final contentMap = _ensureMap(resultMap['content']);
+          final rooms = _roomsFromMap(contentMap);
+          if (rooms.isNotEmpty) return rooms;
+        }
+        final rooms = _roomsFromMap(resultMap);
+        if (rooms.isNotEmpty) return rooms;
+      }
+
+      if (sourceMap['content'] is Map) {
+        final contentMap = _ensureMap(sourceMap['content']);
+        final rooms = _roomsFromMap(contentMap);
+        if (rooms.isNotEmpty) return rooms;
+      }
+
+      return _roomsFromMap(sourceMap);
+    }
+
+    Map<String, dynamic> hotelData = {};
+    if (details is Map) {
+      final detailsMap = _ensureMap(details);
+      if (detailsMap['result'] is Map) {
+        final resultMap = _ensureMap(detailsMap['result']);
+        if (resultMap['content'] is Map) {
+          hotelData = _ensureMap(resultMap['content']);
+        } else if (resultMap['hotel'] is Map) {
+          hotelData = _ensureMap(resultMap['hotel']);
+        } else {
+          hotelData = resultMap;
+        }
+      } else if (detailsMap['content'] is Map) {
+        hotelData = _ensureMap(detailsMap['content']);
+      } else {
+        hotelData = detailsMap;
       }
     }
+
+    final roomsData = _extractRooms(rates);
     final List<dynamic> images =
-        hotelData['images'] is List ? hotelData['images'] : [];
+        hotelData['images'] is List ? List<dynamic>.from(hotelData['images'] as List) : <dynamic>[];
 
     showGeneralDialog(
       context: context,
@@ -3318,22 +4181,28 @@ class _HomePageState extends State<HomePage> {
                           children: [
                             if (hotelData['heroImage'] != null ||
                                 hotel['heroImage'] != null)
-                              ClipRRect(
-                                borderRadius: BorderRadius.circular(12),
-                                child: Image.network(
-                                  _proxyImageUrl((hotelData['heroImage'] ??
-                                          hotel['heroImage'])
-                                      .toString()),
-                                  height: 220,
-                                  width: double.infinity,
-                                  fit: BoxFit.cover,
-                                  errorBuilder: (context, error, stackTrace) =>
-                                      Container(
-                                    height: 220,
-                                    color: Colors.grey[300],
-                                    alignment: Alignment.center,
-                                    child: const Icon(Icons.hotel,
-                                        size: 54, color: Colors.grey),
+                              Center(
+                                child: ConstrainedBox(
+                                  constraints: const BoxConstraints(maxWidth: 520),
+                                  child: ClipRRect(
+                                    borderRadius: BorderRadius.circular(12),
+                                    child: Image.network(
+                                      _proxyImageUrl((hotelData['heroImage'] ??
+                                              hotel['heroImage'])
+                                          .toString()),
+                                      height: 220,
+                                      width: double.infinity,
+                                      fit: BoxFit.cover,
+                                      errorBuilder:
+                                          (context, error, stackTrace) =>
+                                              Container(
+                                        height: 220,
+                                        color: Colors.grey[300],
+                                        alignment: Alignment.center,
+                                        child: const Icon(Icons.hotel,
+                                            size: 54, color: Colors.grey),
+                                      ),
+                                    ),
                                   ),
                                 ),
                               )
@@ -3639,11 +4508,6 @@ class _HomePageState extends State<HomePage> {
 
       _pendingBookingQuery = null;
       _awaitingTravelerCounts = false;
-      _awaitingHotelDateRetry = false;
-      _awaitingFlightDateRetry = false;
-      _lastFlightFrom = null;
-      _lastFlightTo = null;
-      _lastFlightDepartureDate = null;
 
       lastSearchCity = null;
       lastSearchCheckIn = null;

@@ -29,6 +29,15 @@ let BookingsService = class BookingsService {
             'seattle': 'SEA',
             'atlanta': 'ATL',
             'orlando': 'MCO',
+            'tampa': 'TPA',
+            'fort lauderdale': 'FLL',
+            'jacksonville': 'JAX',
+            'austin': 'AUS',
+            'san diego': 'SAN',
+            'san jose': 'SJC',
+            'sacramento': 'SMF',
+            'washington dc': 'DCA',
+            'washington': 'DCA',
             'las vegas': 'LAS',
             'vegas': 'LAS',
             'dallas': 'DFW',
@@ -56,15 +65,108 @@ let BookingsService = class BookingsService {
     }
     normalizeLocation(location) {
         const normalized = location.toLowerCase().trim();
-        const code = this.locationMap[normalized] || normalized.toUpperCase();
-        console.log(`[normalizeLocation] "${location}" → "${normalized}" → "${code}"`);
-        return code;
+        const baseLocation = normalized
+            .replace(/\s*\([^)]*\)\s*$/g, '')
+            .split(',')[0]
+            .split(' - ')[0]
+            .trim();
+        const mappedCode = this.locationMap[normalized] || this.locationMap[baseLocation];
+        if (mappedCode) {
+            console.log(`[normalizeLocation] "${location}" → "${baseLocation}" → "${mappedCode}"`);
+            return mappedCode;
+        }
+        if (/^[a-z]{3}$/i.test(baseLocation)) {
+            const code = baseLocation.toUpperCase();
+            console.log(`[normalizeLocation] "${location}" → "${baseLocation}" → "${code}"`);
+            return code;
+        }
+        console.log(`[normalizeLocation] "${location}" → "${baseLocation}" → invalid`);
+        return null;
+    }
+    titleCaseLocation(value) {
+        return value
+            .split(' ')
+            .filter(Boolean)
+            .map((part) => part.charAt(0).toUpperCase() + part.slice(1))
+            .join(' ');
+    }
+    suggestLocations(location, limit = 6) {
+        const normalized = location.toLowerCase().trim();
+        const baseLocation = normalized
+            .replace(/\s*\([^)]*\)\s*$/g, '')
+            .split(',')[0]
+            .split(' - ')[0]
+            .trim();
+        const stateSuggestions = {
+            florida: ['Miami', 'Orlando', 'Tampa', 'Fort Lauderdale', 'Jacksonville'],
+            california: ['Los Angeles', 'San Francisco', 'San Diego', 'San Jose', 'Sacramento'],
+            texas: ['Dallas', 'Houston', 'Austin'],
+            'new york': ['New York'],
+            illinois: ['Chicago'],
+            nevada: ['Las Vegas'],
+            georgia: ['Atlanta'],
+            washington: ['Seattle'],
+            massachusetts: ['Boston'],
+            arizona: ['Phoenix'],
+            colorado: ['Denver'],
+            ohio: ['Cleveland', 'Columbus', 'Cincinnati'],
+            pennsylvania: ['Philadelphia', 'Pittsburgh'],
+            virginia: ['Richmond', 'Norfolk'],
+            'new jersey': ['Newark'],
+            maryland: ['Baltimore'],
+        };
+        const seen = new Set();
+        const suggestions = [];
+        const addSuggestion = (value) => {
+            const label = this.titleCaseLocation(value.trim());
+            const key = label.toLowerCase();
+            if (!label || seen.has(key))
+                return;
+            seen.add(key);
+            suggestions.push(label);
+        };
+        for (const key of Object.keys(this.locationMap)) {
+            const code = this.locationMap[key];
+            const matchesQuery = !baseLocation ||
+                key.startsWith(baseLocation) ||
+                key.includes(baseLocation) ||
+                code.toLowerCase().startsWith(baseLocation.replace(/\s+/g, '').slice(0, 3));
+            if (matchesQuery) {
+                addSuggestion(key);
+            }
+        }
+        for (const [state, cities] of Object.entries(stateSuggestions)) {
+            if (baseLocation.includes(state) || state.includes(baseLocation)) {
+                for (const city of cities) {
+                    addSuggestion(city);
+                }
+            }
+        }
+        if (!suggestions.length) {
+            ['New York', 'London', 'Los Angeles', 'Chicago', 'Miami', 'Dubai'].forEach(addSuggestion);
+        }
+        return suggestions.slice(0, limit);
     }
     async findFlights(from, to, departureDate) {
         console.log(`[findFlights] Input: from="${from}", to="${to}", date="${departureDate}"`);
         const fromCode = this.normalizeLocation(from);
         const toCode = this.normalizeLocation(to);
         console.log(`[findFlights] Codes: fromCode="${fromCode}", toCode="${toCode}"`);
+        if (!fromCode || !toCode) {
+            const invalidValue = !fromCode ? from : to;
+            const invalidField = !fromCode ? 'from' : 'to';
+            return {
+                success: false,
+                code: 'INVALID_LOCATION',
+                message: !fromCode && !toCode
+                    ? 'Please provide both a departure city or airport and a destination city or airport. For example: London to Miami.'
+                    : !fromCode
+                        ? `I could not recognize "${from}" as a valid departure city or airport. Please provide a city or 3-letter airport code.`
+                        : `I could not recognize "${to}" as a valid destination city or airport. Please provide a city or 3-letter airport code.`,
+                field: invalidField,
+                suggestions: this.suggestLocations(String(invalidValue ?? '')),
+            };
+        }
         const body = {
             origin: fromCode,
             destination: toCode
@@ -253,24 +355,18 @@ let BookingsService = class BookingsService {
         const resolvedAuthBaseUrl = AUTH_BASE_URL;
         try {
             const token = await this.getPartnerToken(resolvedApiKey, resolvedApiSecret, resolvedAuthBaseUrl, resolvedBaseUrl);
-            let dataRes = await globalThis.fetch(`${BASE_URL}${path}`, {
+            let dataRes = await globalThis.fetch(`${resolvedBaseUrl}${path}`, {
                 method: 'POST',
-                headers: {
-                    'Content-Type': 'application/json',
-                    'Authorization': `Bearer ${token}`,
-                },
+                headers: this.buildMcpAuthHeaders(token, resolvedApiKey),
                 body: JSON.stringify(body),
             });
             if (dataRes.status === 401 || dataRes.status === 403) {
                 console.warn('MCP data request unauthorized, refreshing partner token and retrying once.');
                 this.invalidatePartnerToken(resolvedBaseUrl, resolvedAuthBaseUrl, resolvedApiKey);
                 const refreshedToken = await this.getPartnerToken(resolvedApiKey, resolvedApiSecret, resolvedAuthBaseUrl, resolvedBaseUrl);
-                dataRes = await globalThis.fetch(`${BASE_URL}${path}`, {
+                dataRes = await globalThis.fetch(`${resolvedBaseUrl}${path}`, {
                     method: 'POST',
-                    headers: {
-                        'Content-Type': 'application/json',
-                        'Authorization': `Bearer ${refreshedToken}`,
-                    },
+                    headers: this.buildMcpAuthHeaders(refreshedToken, resolvedApiKey),
                     body: JSON.stringify(body),
                 });
             }
@@ -328,7 +424,8 @@ let BookingsService = class BookingsService {
                 throw new Error(`Auth failed: ${authRes.status}`);
             }
             const authBody = await authRes.json();
-            const token = authBody?.token?.toString();
+            console.log('Auth Response Keys:', Object.keys(authBody || {}));
+            const token = this.extractPartnerToken(authBody);
             if (!token) {
                 throw new Error('Auth failed: missing token in response');
             }
@@ -348,6 +445,35 @@ let BookingsService = class BookingsService {
         finally {
             this.partnerTokenRequest = null;
         }
+    }
+    buildMcpAuthHeaders(token, apiKey) {
+        const normalizedToken = this.normalizePartnerToken(token);
+        return {
+            'Content-Type': 'application/json',
+            Authorization: `Bearer ${normalizedToken}`,
+            'x-partner-token': normalizedToken,
+            'x-api-key': apiKey,
+        };
+    }
+    normalizePartnerToken(token) {
+        return token.replace(/^Bearer\s+/i, '').trim();
+    }
+    extractPartnerToken(authBody) {
+        const candidates = [
+            authBody?.token,
+            authBody?.accessToken,
+            authBody?.partnerToken,
+            authBody?.data?.token,
+            authBody?.data?.accessToken,
+            authBody?.result?.token,
+            authBody?.result?.accessToken,
+        ];
+        for (const candidate of candidates) {
+            if (typeof candidate === 'string' && candidate.trim()) {
+                return this.normalizePartnerToken(candidate);
+            }
+        }
+        return null;
     }
 };
 exports.BookingsService = BookingsService;

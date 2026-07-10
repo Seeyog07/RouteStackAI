@@ -8,6 +8,8 @@ export declare class ChatController {
     }): Promise<{
         reply: string;
         booking?: undefined;
+        suggestions?: undefined;
+        suggestionField?: undefined;
         cards?: undefined;
         sessionId: string;
         checkIn?: undefined;
@@ -22,6 +24,17 @@ export declare class ChatController {
             details?: string;
             id: string;
         };
+        suggestions?: undefined;
+        suggestionField?: undefined;
+        cards?: undefined;
+        sessionId: string;
+        checkIn?: undefined;
+        checkOut?: undefined;
+    } | {
+        reply: any;
+        suggestions: any;
+        suggestionField: string;
+        booking?: undefined;
         cards?: undefined;
         sessionId: string;
         checkIn?: undefined;
@@ -30,6 +43,8 @@ export declare class ChatController {
         reply: string;
         cards: any;
         booking?: undefined;
+        suggestions?: undefined;
+        suggestionField?: undefined;
         sessionId: string;
         checkIn?: undefined;
         checkOut?: undefined;
@@ -40,5 +55,7 @@ export declare class ChatController {
         checkOut: string;
         cards: any;
         booking?: undefined;
+        suggestions?: undefined;
+        suggestionField?: undefined;
     }>;
 }

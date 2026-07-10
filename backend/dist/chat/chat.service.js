@@ -88,6 +88,9 @@ let ChatService = class ChatService {
         const cleaned = this.sanitizeLocationCandidate(String(value).trim());
         if (!cleaned)
             return undefined;
+        const lowered = cleaned.toLowerCase();
+        if (['for', 'with', 'and', 'from', 'to', 'on', 'at', 'in'].includes(lowered))
+            return undefined;
         if (!/^[a-zA-Z][a-zA-Z\s.'-]{1,49}$/.test(cleaned))
             return undefined;
         return cleaned;
@@ -523,7 +526,8 @@ let ChatService = class ChatService {
         if (match) {
             const city = match[1].trim();
             const country = match[2].trim();
-            if (!/\d{4}-\d{2}-\d{2}/.test(country) && !['from', 'to', 'on', 'at'].includes(country.toLowerCase())) {
+            if (!/\d{4}-\d{2}-\d{2}/.test(country) &&
+                !['from', 'to', 'on', 'at', 'for', 'with', 'and', 'in'].includes(country.toLowerCase())) {
                 return { city, country };
             }
         }
@@ -573,6 +577,7 @@ let ChatService = class ChatService {
     clearFlightFields(sess) {
         sess.from = undefined;
         sess.to = undefined;
+        sess.pendingFlightLocationField = undefined;
         sess.departureDate = undefined;
         sess.returnDate = undefined;
         sess.lastResults = undefined;
@@ -914,11 +919,23 @@ let ChatService = class ChatService {
                 sess.from = from;
             if (to)
                 sess.to = to;
+            const trimmedInput = originalMessage.trim();
+            const singleLocationCandidate = /^[a-zA-Z\s.'-]{2,50}$/.test(trimmedInput) &&
+                !/\b(?:book|flight|fly|departure|adults?|children?|date|from|to|on|for|with|hotel|stay|room)\b/i.test(trimmedInput)
+                ? trimmedInput
+                : null;
+            if (sess.state === 'awaiting_flight_location_fix' &&
+                sess.pendingFlightLocationField &&
+                !from &&
+                !to &&
+                singleLocationCandidate) {
+                sess[sess.pendingFlightLocationField] = singleLocationCandidate;
+                sess.pendingFlightLocationField = undefined;
+                sess.state = 'idle';
+            }
             if (!from && !to) {
-                const trimmed = originalMessage.trim();
-                if (/^[a-zA-Z\s]+$/.test(trimmed) &&
-                    trimmed.length > 1 &&
-                    !/\b(?:book|flight|fly|departure|adults?|children?|date|from|to|on|for|with)\b/i.test(trimmed)) {
+                const trimmed = trimmedInput;
+                if (singleLocationCandidate) {
                     if (!sess.from) {
                         sess.from = trimmed;
                     }
@@ -975,11 +992,26 @@ let ChatService = class ChatService {
             });
             try {
                 const flightResponse = await this.bookingsService.findFlights(sess.from, sess.to, sess.departureDate);
+                if (flightResponse && typeof flightResponse === 'object' && flightResponse.success === false) {
+                    const invalidField = flightResponse.field === 'from' ? 'from' : 'to';
+                    const suggestions = Array.isArray(flightResponse.suggestions)
+                        ? flightResponse.suggestions.filter((item) => typeof item === 'string' && item.trim())
+                        : [];
+                    sess.state = suggestions.length > 0 ? 'awaiting_flight_location_fix' : 'idle';
+                    sess.pendingFlightLocationField = suggestions.length > 0 ? invalidField : undefined;
+                    return {
+                        reply: flightResponse.message ||
+                            'Please provide a valid departure city or airport and destination city or airport.',
+                        suggestions,
+                        suggestionField: invalidField,
+                    };
+                }
                 const flightItems = (flightResponse && Array.isArray(flightResponse.result))
                     ? flightResponse.result
                     : [];
                 sess.lastResults = flightItems;
                 sess.state = 'choosing_flight';
+                sess.pendingFlightLocationField = undefined;
                 return {
                     reply: `Great! I found flights from ${sess.from?.toUpperCase()} to ${sess.to?.toUpperCase()} on ${sess.departureDate}. Which one would you like?`,
                     cards: flightResponse,
